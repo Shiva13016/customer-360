@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "factoryName": {
-      "value": ""adf-c360-canadalife"
+            "value": "adf-c360-canadalife"
     },
     "location": {
       "value": "canadacentral"
