@@ -1,0 +1,2143 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"type": "string",
+			"metadata": "Data Factory name",
+			"defaultValue": "adf-c360-canadalife"
+		},
+		"ls_adls_c360_properties_typeProperties_url": {
+			"type": "string",
+			"defaultValue": "https://adlsc360canadalife.dfs.core.windows.net/"
+		},
+		"ls_sql_control_properties_typeProperties_server": {
+			"type": "string",
+			"defaultValue": "sql-c360-prod.database.windows.net"
+		},
+		"ls_sql_control_properties_typeProperties_database": {
+			"type": "string",
+			"defaultValue": "c360-control-db"
+		},
+		"trg_raw_landing_file_arrival_properties_typeProperties_scope": {
+			"type": "string",
+			"defaultValue": "/subscriptions/b68f64f5-49ae-4b7a-81c9-25cf642d4691/resourceGroups/rg-c360-prod/providers/Microsoft.Storage/storageAccounts/adlsc360canadalife"
+		}
+	},
+	"variables": {
+		"factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('factoryName'), '/ls_adls_c360')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "Primary ADLS Gen2 data lake for C360 platform",
+				"annotations": [],
+				"type": "AzureBlobFS",
+				"typeProperties": {
+					"url": "[parameters('ls_adls_c360_properties_typeProperties_url')]"
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ls_sql_control')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "C360 ingestion control ledger",
+				"annotations": [],
+				"type": "AzureSqlDatabase",
+				"typeProperties": {
+					"server": "[parameters('ls_sql_control_properties_typeProperties_server')]",
+					"database": "[parameters('ls_sql_control_properties_typeProperties_database')]",
+					"encrypt": "mandatory",
+					"trustServerCertificate": false,
+					"authenticationType": "SystemAssignedManagedIdentity"
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/trg_raw_landing_file_arrival')]",
+			"type": "Microsoft.DataFactory/factories/triggers",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"runtimeState": "Stopped",
+				"pipelines": [],
+				"type": "BlobEventsTrigger",
+				"typeProperties": {
+					"blobPathBeginsWith": "/raw-landing/blobs/",
+					"ignoreEmptyBlobs": true,
+					"scope": "[parameters('trg_raw_landing_file_arrival_properties_typeProperties_scope')]",
+					"events": [
+						"Microsoft.Storage.BlobCreated"
+					]
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ds_adls_bronze_metadata')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "ls_adls_c360",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"p_bronze_folder": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"folderPath": {
+							"value": "@dataset().p_bronze_folder",
+							"type": "Expression"
+						},
+						"fileSystem": "bronze"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/ls_adls_c360')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ds_adls_bronze_sink')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "ls_adls_c360",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"p_bronze_container": {
+						"type": "string"
+					},
+					"p_source_name": {
+						"type": "string"
+					},
+					"p_partition": {
+						"type": "string"
+					},
+					"p_filename": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "DelimitedText",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().p_filename",
+							"type": "Expression"
+						},
+						"folderPath": {
+							"value": "@concat(dataset().p_source_name,'/',dataset().p_partition)",
+							"type": "Expression"
+						},
+						"fileSystem": {
+							"value": "@dataset().p_bronze_container",
+							"type": "Expression"
+						}
+					},
+					"columnDelimiter": ",",
+					"escapeChar": "\\",
+					"firstRowAsHeader": true,
+					"quoteChar": "\""
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/ls_adls_c360')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ds_adls_raw_metadata')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "ls_adls_c360",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"p_check_folder": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"folderPath": {
+							"value": "@dataset().p_check_folder",
+							"type": "Expression"
+						},
+						"fileSystem": "raw-landing"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/ls_adls_c360')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ds_adls_raw_source')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "ls_adls_c360",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"p_container": {
+						"type": "string"
+					},
+					"p_folder_path": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "DelimitedText",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"folderPath": {
+							"value": "@dataset().p_folder_path",
+							"type": "Expression"
+						},
+						"fileSystem": {
+							"value": "@dataset().p_container",
+							"type": "Expression"
+						}
+					},
+					"columnDelimiter": ",",
+					"escapeChar": "\\",
+					"firstRowAsHeader": true,
+					"quoteChar": "\""
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/ls_adls_c360')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/ds_sql_control_table')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "ls_sql_control",
+					"type": "LinkedServiceReference"
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [
+					{
+						"name": "source_id",
+						"type": "int",
+						"precision": 10
+					},
+					{
+						"name": "source_system",
+						"type": "varchar"
+					},
+					{
+						"name": "source_type",
+						"type": "varchar"
+					},
+					{
+						"name": "source_path",
+						"type": "varchar"
+					},
+					{
+						"name": "file_pattern",
+						"type": "varchar"
+					},
+					{
+						"name": "target_container",
+						"type": "varchar"
+					},
+					{
+						"name": "target_path",
+						"type": "varchar"
+					},
+					{
+						"name": "is_active",
+						"type": "bit"
+					},
+					{
+						"name": "is_critical",
+						"type": "bit"
+					},
+					{
+						"name": "load_type",
+						"type": "varchar"
+					},
+					{
+						"name": "schedule_cron",
+						"type": "varchar"
+					},
+					{
+						"name": "last_run_status",
+						"type": "varchar"
+					},
+					{
+						"name": "last_run_start",
+						"type": "datetime2",
+						"scale": 7
+					},
+					{
+						"name": "last_run_end",
+						"type": "datetime2",
+						"scale": 7
+					},
+					{
+						"name": "last_file_count",
+						"type": "int",
+						"precision": 10
+					},
+					{
+						"name": "last_row_count",
+						"type": "bigint",
+						"precision": 19
+					},
+					{
+						"name": "created_date",
+						"type": "datetime2",
+						"scale": 7
+					}
+				],
+				"typeProperties": {
+					"schema": "dbo",
+					"table": "ingestion_control"
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/ls_sql_control')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_ingest_api_single')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "Ingests a single API/REST source. Aligned with central metadata pattern.",
+				"activities": [
+					{
+						"name": "SetPartition",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_partition",
+							"value": {
+								"value": "@concat('year=',formatDateTime(utcNow(),'yyyy'),'/month=',formatDateTime(utcNow(),'MM'),'/day=',formatDateTime(utcNow(),'dd'))",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "SetRunStart",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_run_start",
+							"value": {
+								"value": "@utcNow()",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "CopyRawToBronze",
+						"type": "Copy",
+						"dependsOn": [
+							{
+								"activity": "SetPartition",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "SetRunStart",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "DelimitedTextSource",
+								"storeSettings": {
+									"type": "AzureBlobFSReadSettings",
+									"recursive": true,
+									"modifiedDatetimeStart": {
+										"value": "@if(equals(pipeline().parameters.source_config.load_type, 'FULL'), json('null'), pipeline().parameters.source_config.last_run_start)",
+										"type": "Expression"
+									},
+									"wildcardFolderPath": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									},
+									"wildcardFileName": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							},
+							"sink": {
+								"type": "DelimitedTextSink",
+								"storeSettings": {
+									"type": "AzureBlobFSWriteSettings"
+								},
+								"formatSettings": {
+									"type": "DelimitedTextWriteSettings",
+									"quoteAllText": true,
+									"fileExtension": ".csv"
+								}
+							},
+							"enableStaging": false
+						},
+						"inputs": [
+							{
+								"referenceName": "ds_adls_raw_source",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_container": "raw-landing",
+									"p_folder_path": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									}
+								}
+							}
+						],
+						"outputs": [
+							{
+								"referenceName": "ds_adls_bronze_sink",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_bronze_container": {
+										"value": "@pipeline().parameters.source_config.target_container",
+										"type": "Expression"
+									},
+									"p_source_name": {
+										"value": "@pipeline().parameters.source_config.target_path",
+										"type": "Expression"
+									},
+									"p_partition": {
+										"value": "@variables('v_partition')",
+										"type": "Expression"
+									},
+									"p_filename": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							}
+						]
+					},
+					{
+						"name": "UpdateControlTableSuccess",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "dbo.sp_update_source_status",
+							"storedProcedureParameters": {
+								"source_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.source_id",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"run_status": {
+									"value": "Succeeded",
+									"type": "String"
+								},
+								"file_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"row_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int64"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "UpdateControlTableFailed",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Failed"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "dbo.sp_update_source_status",
+							"storedProcedureParameters": {
+								"source_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.source_id",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"run_status": {
+									"value": "Failed",
+									"type": "String"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "FailPipelineExecution",
+						"type": "Fail",
+						"dependsOn": [
+							{
+								"activity": "UpdateControlTableFailed",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"message": {
+								"value": "@concat('API ingestion failed for system source: ', pipeline().parameters.source_config.source_system)",
+								"type": "Expression"
+							},
+							"errorCode": "CHILD_API_INGESTION_FAILED"
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"source_config": {
+						"type": "object"
+					}
+				},
+				"variables": {
+					"v_partition": {
+						"type": "String"
+					},
+					"v_run_start": {
+						"type": "String"
+					}
+				},
+				"annotations": [],
+				"lastPublishTime": "2026-06-04T19:41:10Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/ds_adls_raw_source')]",
+				"[concat(variables('factoryId'), '/datasets/ds_adls_bronze_sink')]",
+				"[concat(variables('factoryId'), '/linkedServices/ls_sql_control')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_ingest_cdc_single')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "Ingests a single CDC source. Aligned with central metadata pattern.",
+				"activities": [
+					{
+						"name": "SetPartition",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_partition",
+							"value": {
+								"value": "@concat('year=',formatDateTime(utcNow(),'yyyy'),'/month=',formatDateTime(utcNow(),'MM'),'/day=',formatDateTime(utcNow(),'dd'))",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "SetRunStart",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_run_start",
+							"value": {
+								"value": "@utcNow()",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "CopyRawToBronze",
+						"type": "Copy",
+						"dependsOn": [
+							{
+								"activity": "SetPartition",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "SetRunStart",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "DelimitedTextSource",
+								"storeSettings": {
+									"type": "AzureBlobFSReadSettings",
+									"recursive": true,
+									"modifiedDatetimeStart": {
+										"value": "@if(equals(pipeline().parameters.source_config.load_type, 'FULL'), json('null'), pipeline().parameters.source_config.last_run_start)",
+										"type": "Expression"
+									},
+									"wildcardFolderPath": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									},
+									"wildcardFileName": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							},
+							"sink": {
+								"type": "DelimitedTextSink",
+								"storeSettings": {
+									"type": "AzureBlobFSWriteSettings",
+									"copyBehavior": "PreserveHierarchy"
+								}
+							},
+							"enableStaging": false
+						},
+						"inputs": [
+							{
+								"referenceName": "ds_adls_raw_source",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_container": "raw-landing",
+									"p_folder_path": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									}
+								}
+							}
+						],
+						"outputs": [
+							{
+								"referenceName": "ds_adls_bronze_sink",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_bronze_container": {
+										"value": "@pipeline().parameters.source_config.target_container",
+										"type": "Expression"
+									},
+									"p_source_name": {
+										"value": "@pipeline().parameters.source_config.target_path",
+										"type": "Expression"
+									},
+									"p_partition": {
+										"value": "@variables('v_partition')",
+										"type": "Expression"
+									},
+									"p_filename": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							}
+						]
+					},
+					{
+						"name": "UpdateControlTableSuccess",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "dbo.sp_update_source_status",
+							"storedProcedureParameters": {
+								"source_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.source_id",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"run_status": {
+									"value": "Succeeded",
+									"type": "String"
+								},
+								"file_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"row_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int64"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "UpdateControlTableFailed",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Failed"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "dbo.sp_update_source_status",
+							"storedProcedureParameters": {
+								"source_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.source_id",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"run_status": {
+									"value": "Failed",
+									"type": "String"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "FailPipelineExecution",
+						"type": "Fail",
+						"dependsOn": [
+							{
+								"activity": "UpdateControlTableFailed",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"message": {
+								"value": "@concat('CDC ingestion failed for source: ', pipeline().parameters.source_config.source_system)",
+								"type": "Expression"
+							},
+							"errorCode": "CHILD_CDC_INGESTION_FAILED"
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"source_config": {
+						"type": "object"
+					}
+				},
+				"variables": {
+					"v_partition": {
+						"type": "String"
+					},
+					"v_run_start": {
+						"type": "String"
+					}
+				},
+				"annotations": [],
+				"lastPublishTime": "2026-06-04T19:41:10Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/ds_adls_raw_source')]",
+				"[concat(variables('factoryId'), '/datasets/ds_adls_bronze_sink')]",
+				"[concat(variables('factoryId'), '/linkedServices/ls_sql_control')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_ingest_filebatch_single')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "Ingests file-batch from raw to bronze. Aligned with 12-column control table schema.",
+				"activities": [
+					{
+						"name": "SetPartition",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_partition",
+							"value": {
+								"value": "@concat('year=', formatDateTime(utcNow(),'yyyy'), '/month=', formatDateTime(utcNow(),'MM'), '/day=', formatDateTime(utcNow(),'dd'))",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "SetRunStart",
+						"type": "SetVariable",
+						"dependsOn": [],
+						"policy": {
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"variableName": "v_run_start",
+							"value": {
+								"value": "@utcNow()",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "CopyRawToBronze",
+						"type": "Copy",
+						"dependsOn": [
+							{
+								"activity": "SetPartition",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "SetRunStart",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "DelimitedTextSource",
+								"storeSettings": {
+									"type": "AzureBlobFSReadSettings",
+									"recursive": true,
+									"modifiedDatetimeStart": {
+										"value": "@if(equals(pipeline().parameters.source_config.load_type, 'FULL'), json('null'), pipeline().parameters.source_config.last_run_start)",
+										"type": "Expression"
+									},
+									"wildcardFolderPath": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									},
+									"wildcardFileName": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							},
+							"sink": {
+								"type": "DelimitedTextSink",
+								"storeSettings": {
+									"type": "AzureBlobFSWriteSettings",
+									"copyBehavior": "PreserveHierarchy"
+								}
+							},
+							"enableStaging": false
+						},
+						"inputs": [
+							{
+								"referenceName": "ds_adls_raw_source",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_container": "raw-landing",
+									"p_folder_path": {
+										"value": "@pipeline().parameters.source_config.source_path",
+										"type": "Expression"
+									}
+								}
+							}
+						],
+						"outputs": [
+							{
+								"referenceName": "ds_adls_bronze_sink",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_bronze_container": {
+										"value": "@pipeline().parameters.source_config.target_container",
+										"type": "Expression"
+									},
+									"p_source_name": {
+										"value": "@pipeline().parameters.source_config.target_path",
+										"type": "Expression"
+									},
+									"p_partition": {
+										"value": "@variables('v_partition')",
+										"type": "Expression"
+									},
+									"p_filename": {
+										"value": "@pipeline().parameters.source_config.file_name_pattern",
+										"type": "Expression"
+									}
+								}
+							}
+						]
+					},
+					{
+						"name": "UpdateControlTableSuccess",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[dbo].[sp_complete_pipeline_run]",
+							"storedProcedureParameters": {
+								"log_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.log_id",
+										"type": "Expression"
+									},
+									"type": "Int64"
+								},
+								"status": {
+									"value": "Succeeded",
+									"type": "String"
+								},
+								"file_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								},
+								"row_count": {
+									"value": {
+										"value": "@activity('CopyRawToBronze').output.filesWritten",
+										"type": "Expression"
+									},
+									"type": "Int64"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "UpdateControlTableFailed",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "CopyRawToBronze",
+								"dependencyConditions": [
+									"Failed"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[dbo].[sp_fail_pipeline_run]",
+							"storedProcedureParameters": {
+								"log_id": {
+									"value": {
+										"value": "@pipeline().parameters.source_config.log_id",
+										"type": "Expression"
+									},
+									"type": "Int64"
+								},
+								"error_message": {
+									"value": "Copy activity failed.",
+									"type": "String"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "ls_sql_control",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "FailPipelineExecution",
+						"type": "Fail",
+						"dependsOn": [
+							{
+								"activity": "UpdateControlTableFailed",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"message": "Child ingestion failed; control table updated.",
+							"errorCode": "CHILD_FAIL"
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"source_config": {
+						"type": "object"
+					}
+				},
+				"variables": {
+					"v_partition": {
+						"type": "String"
+					},
+					"v_run_start": {
+						"type": "String"
+					}
+				},
+				"annotations": [],
+				"lastPublishTime": "2026-06-04T19:41:10Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/ds_adls_raw_source')]",
+				"[concat(variables('factoryId'), '/datasets/ds_adls_bronze_sink')]",
+				"[concat(variables('factoryId'), '/linkedServices/ls_sql_control')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_master_c360_ingest')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"description": "ADF master pipeline - full load on first run, incremental on subsequent runs. Any source failure triggers alert and hard-fail.",
+				"activities": [
+					{
+						"name": "CheckSourceFilesExist",
+						"type": "GetMetadata",
+						"dependsOn": [],
+						"policy": {
+							"retry": 2,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"dataset": {
+								"referenceName": "ds_adls_raw_source",
+								"type": "DatasetReference",
+								"parameters": {
+									"p_container": {
+										"value": "raw-landing",
+										"type": "Expression"
+									},
+									"p_folder_path": {
+										"value": "/",
+										"type": "Expression"
+									}
+								}
+							},
+							"fieldList": [
+								"childItems"
+							],
+							"storeSettings": {
+								"type": "AzureBlobFSReadSettings",
+								"recursive": true,
+								"enablePartitionDiscovery": false
+							},
+							"formatSettings": {
+								"type": "DelimitedTextReadSettings"
+							}
+						}
+					},
+					{
+						"name": "AlertSourceFileMissing",
+						"type": "WebActivity",
+						"dependsOn": [
+							{
+								"activity": "CheckSourceFilesExist",
+								"dependencyConditions": [
+									"Failed"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"method": "POST",
+							"headers": {
+								"Content-Type": "application/json"
+							},
+							"url": {
+								"value": "@pipeline().parameters.alert_webhook_url",
+								"type": "Expression"
+							},
+							"body": {
+								"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - Source File Check Failed\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | TriggerTime: ', pipeline().TriggerTime, ' | GetMetadata on ds_adls_raw_source failed. No files found or container unreachable.\\\"}')",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "FailSourceFileMissing",
+						"type": "Fail",
+						"dependsOn": [
+							{
+								"activity": "AlertSourceFileMissing",
+								"dependencyConditions": [
+									"Succeeded",
+									"Failed"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"message": "Source file check failed - ADLS container unreachable or empty. Pipeline aborted.",
+							"errorCode": "SOURCE_FILE_CHECK_FAILED"
+						}
+					},
+					{
+						"name": "LookupFileBatchSources",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "CheckSourceFilesExist",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderStoredProcedureName": "dbo.sp_get_active_sources",
+								"storedProcedureParameters": {
+									"source_type": {
+										"type": "String",
+										"value": "file_batch"
+									}
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": false
+						}
+					},
+					{
+						"name": "LookupCDCSources",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "CheckSourceFilesExist",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderStoredProcedureName": "dbo.sp_get_active_sources",
+								"storedProcedureParameters": {
+									"source_type": {
+										"type": "String",
+										"value": "db_cdc"
+									}
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": false
+						}
+					},
+					{
+						"name": "LookupAPISources",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "CheckSourceFilesExist",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderStoredProcedureName": "dbo.sp_get_active_sources",
+								"storedProcedureParameters": {
+									"source_type": {
+										"type": "String",
+										"value": "api_rest"
+									}
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": false
+						}
+					},
+					{
+						"name": "ForEach_FileBatch",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "LookupFileBatchSources",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('LookupFileBatchSources').output.value",
+								"type": "Expression"
+							},
+							"isSequential": false,
+							"batchCount": 4,
+							"activities": [
+								{
+									"name": "ExecuteFileBatchPipeline",
+									"type": "ExecutePipeline",
+									"dependsOn": [],
+									"policy": {
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"pipeline": {
+											"referenceName": "pl_ingest_filebatch_single",
+											"type": "PipelineReference"
+										},
+										"waitOnCompletion": true,
+										"parameters": {
+											"source_config": {
+												"value": "@item()",
+												"type": "Expression"
+											}
+										}
+									}
+								},
+								{
+									"name": "AlertFileBatchSourceFailed",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "ExecuteFileBatchPipeline",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json"
+										},
+										"url": {
+											"value": "@pipeline().parameters.alert_webhook_url",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - FileBatch Source FAILED\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | source_id: ', string(item().source_id), ' | source_name: ', item().source_system, ' failed to load. Pipeline will abort.\\\"}')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "FailFileBatchSource",
+									"type": "Fail",
+									"dependsOn": [
+										{
+											"activity": "AlertFileBatchSourceFailed",
+											"dependencyConditions": [
+												"Succeeded",
+												"Failed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"message": {
+											"value": "@concat('FileBatch source FAILED - source_id: ', string(item().source_id), ', source_name: ', item().source_system, '. All sources must succeed. Pipeline aborted.')",
+											"type": "Expression"
+										},
+										"errorCode": "FILEBATCH_SOURCE_FAILED"
+									}
+								},
+								{
+									"name": "ValidateMetadataGate_filebatch",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [
+										{
+											"activity": "ExecuteFileBatchPipeline",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[dbo].[sp_validate_and_update_metadata]",
+										"storedProcedureParameters": {
+											"source_id": {
+												"value": {
+													"value": "@item().source_id",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											},
+											"run_date": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											},
+											"load_type": {
+												"value": {
+													"value": "@if(or(pipeline().parameters.force_full_load, equals(item().last_run_status, null)), 'FULL', 'INCREMENTAL')",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"new_watermark": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "ls_sql_control",
+										"type": "LinkedServiceReference"
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "ForEach_CDC",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "LookupCDCSources",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('LookupCDCSources').output.value",
+								"type": "Expression"
+							},
+							"isSequential": true,
+							"activities": [
+								{
+									"name": "ExecuteCDCPipeline",
+									"type": "ExecutePipeline",
+									"dependsOn": [],
+									"policy": {
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"pipeline": {
+											"referenceName": "pl_ingest_cdc_single",
+											"type": "PipelineReference"
+										},
+										"waitOnCompletion": true,
+										"parameters": {
+											"source_config": {
+												"value": "@item()",
+												"type": "Expression"
+											}
+										}
+									}
+								},
+								{
+									"name": "AlertCDCSourceFailed",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "ExecuteCDCPipeline",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json"
+										},
+										"url": {
+											"value": "@pipeline().parameters.alert_webhook_url",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - CDC Source FAILED\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | source_id: ', string(item().source_id), ' | source_name: ', item().source_system, ' failed to load. Pipeline will abort.\\\"}')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "FailCDCSource",
+									"type": "Fail",
+									"dependsOn": [
+										{
+											"activity": "AlertCDCSourceFailed",
+											"dependencyConditions": [
+												"Succeeded",
+												"Failed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"message": {
+											"value": "@concat('CDC source FAILED - source_id: ', string(item().source_id), ', source_name: ', item().source_system, '. All sources must succeed. Pipeline aborted.')",
+											"type": "Expression"
+										},
+										"errorCode": "CDC_SOURCE_FAILED"
+									}
+								},
+								{
+									"name": "ValidateMetadataGate_cdc",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [
+										{
+											"activity": "ExecuteCDCPipeline",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[dbo].[sp_validate_and_update_metadata]",
+										"storedProcedureParameters": {
+											"source_id": {
+												"value": {
+													"value": "@item().source_id",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											},
+											"run_date": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											},
+											"load_type": {
+												"value": {
+													"value": "@if(or(pipeline().parameters.force_full_load, equals(item().last_run_status, null)), 'FULL', 'INCREMENTAL')",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"new_watermark": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "ls_sql_control",
+										"type": "LinkedServiceReference"
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "ForEach_API",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "LookupAPISources",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('LookupAPISources').output.value",
+								"type": "Expression"
+							},
+							"isSequential": false,
+							"batchCount": 2,
+							"activities": [
+								{
+									"name": "ExecuteAPIPipeline",
+									"type": "ExecutePipeline",
+									"dependsOn": [],
+									"policy": {
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"pipeline": {
+											"referenceName": "pl_ingest_api_single",
+											"type": "PipelineReference"
+										},
+										"waitOnCompletion": true,
+										"parameters": {
+											"source_config": {
+												"value": "@item()",
+												"type": "Expression"
+											}
+										}
+									}
+								},
+								{
+									"name": "AlertAPISourceFailed",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "ExecuteAPIPipeline",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json"
+										},
+										"url": {
+											"value": "@pipeline().parameters.alert_webhook_url",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - API Source FAILED\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | source_id: ', string(item().source_id), ' | source_name: ', item().source_system, ' failed to load. Pipeline will abort.\\\"}')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "FailAPISource",
+									"type": "Fail",
+									"dependsOn": [
+										{
+											"activity": "AlertAPISourceFailed",
+											"dependencyConditions": [
+												"Succeeded",
+												"Failed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"message": {
+											"value": "@concat('API source FAILED - source_id: ', string(item().source_id), ', source_name: ', item().source_system, '. All sources must succeed. Pipeline aborted.')",
+											"type": "Expression"
+										},
+										"errorCode": "API_SOURCE_FAILED"
+									}
+								},
+								{
+									"name": "ValidateMetadataGate_api",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [
+										{
+											"activity": "ExecuteAPIPipeline",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[dbo].[sp_validate_and_update_metadata]",
+										"storedProcedureParameters": {
+											"source_id": {
+												"value": {
+													"value": "@item().source_id",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											},
+											"run_date": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											},
+											"load_type": {
+												"value": {
+													"value": "@if(or(pipeline().parameters.force_full_load, equals(item().last_run_status, null)), 'FULL', 'INCREMENTAL')",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"new_watermark": {
+												"value": {
+													"value": "@utcNow()",
+													"type": "Expression"
+												},
+												"type": "DateTime"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "ls_sql_control",
+										"type": "LinkedServiceReference"
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "CheckDataQuality",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "ForEach_FileBatch",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "ForEach_CDC",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "ForEach_API",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderQuery": {
+									"value": "@concat('SELECT COUNT(c.source_id) AS total_active_sources, SUM(CASE WHEN v.status = ''SUCCESS'' THEN 1 ELSE 0 END) AS successful_sources, SUM(CASE WHEN v.status = ''FAILED'' THEN 1 ELSE 0 END) AS failed_sources, SUM(CASE WHEN v.status IS NULL THEN 1 ELSE 0 END) AS not_run_sources, SUM(ISNULL(v.rows_written, 0)) AS total_rows_written FROM dbo.ingestion_control c LEFT JOIN dbo.vw_ingestion_run_log v ON c.source_system = v.source_name AND v.run_start >= ''', pipeline().TriggerTime, ''' WHERE c.is_active = 1')",
+									"type": "Expression"
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": true
+						}
+					},
+					{
+						"name": "CheckCriticalSourcesFailed",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "ForEach_FileBatch",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "ForEach_CDC",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "ForEach_API",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderQuery": {
+									"value": "@concat('SELECT COUNT(*) AS failed_critical FROM dbo.vw_ingestion_run_log r INNER JOIN dbo.ingestion_control c ON r.source_name = c.source_system WHERE r.status = ''FAILED'' AND c.is_active = 1 AND r.run_start >= ''', pipeline().TriggerTime, '''')",
+									"type": "Expression"
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": true
+						}
+					},
+					{
+						"name": "ValidateDataQuality",
+						"type": "IfCondition",
+						"dependsOn": [
+							{
+								"activity": "CheckCriticalSourcesFailed",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							},
+							{
+								"activity": "CheckDataQuality",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"expression": {
+								"value": "@equals(activity('CheckCriticalSourcesFailed').output.firstRow.failed_critical, 0)",
+								"type": "Expression"
+							},
+							"ifFalseActivities": [
+								{
+									"name": "AlertQualityFailed",
+									"type": "WebActivity",
+									"dependsOn": [],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json"
+										},
+										"url": {
+											"value": "@pipeline().parameters.alert_webhook_url",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - Data Quality Check FAILED\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | Critical failures: ', string(activity('CheckCriticalSourcesFailed').output.firstRow.failed_critical), ' | Successful: ', string(activity('CheckDataQuality').output.firstRow.successful_sources), ' | Failed: ', string(activity('CheckDataQuality').output.firstRow.failed_sources), '\\\"}')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "FailQualityCheck",
+									"type": "Fail",
+									"dependsOn": [
+										{
+											"activity": "AlertQualityFailed",
+											"dependencyConditions": [
+												"Succeeded",
+												"Failed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"message": {
+											"value": "@concat('DATA QUALITY FAILED. Critical failures: ', string(activity('CheckCriticalSourcesFailed').output.firstRow.failed_critical), '. Total failed: ', string(activity('CheckDataQuality').output.firstRow.failed_sources))",
+											"type": "Expression"
+										},
+										"errorCode": "DATA_QUALITY_FAILED"
+									}
+								}
+							],
+							"ifTrueActivities": [
+								{
+									"name": "DataQualityPassed",
+									"type": "Wait",
+									"dependsOn": [],
+									"userProperties": [],
+									"typeProperties": {
+										"waitTimeInSeconds": 1
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "ValidateCompleteness",
+						"type": "Lookup",
+						"dependsOn": [
+							{
+								"activity": "ValidateDataQuality",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderQuery": {
+									"value": "@concat('SELECT COUNT(*) AS total_active, SUM(CASE WHEN last_run_status = ''SUCCESS'' AND last_successful_run >= ''', formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd HH:mm:ss'), ''' THEN 1 ELSE 0 END) AS completed_today, SUM(CASE WHEN last_run_row_count > 0 THEN 1 ELSE 0 END) AS sources_with_data, SUM(CASE WHEN is_critical = 1 AND (last_run_status != ''SUCCESS'' OR last_successful_run < ''', formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd HH:mm:ss'), ''') THEN 1 ELSE 0 END) AS critical_incomplete FROM dbo.ingestion_control WHERE is_active = 1 AND source_type IN (''file_batch'', ''db_cdc'', ''api_rest'')')",
+									"type": "Expression"
+								},
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "ds_sql_control_table",
+								"type": "DatasetReference",
+								"parameters": {}
+							},
+							"firstRowOnly": true
+						}
+					},
+					{
+						"name": "CompletenessCheck",
+						"type": "IfCondition",
+						"dependsOn": [
+							{
+								"activity": "ValidateCompleteness",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"expression": {
+								"value": "@equals(activity('ValidateCompleteness').output.firstRow.critical_incomplete, 0)",
+								"type": "Expression"
+							},
+							"ifFalseActivities": [
+								{
+									"name": "AlertCompletenessCheckFailed",
+									"type": "WebActivity",
+									"dependsOn": [],
+									"policy": {
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json"
+										},
+										"url": {
+											"value": "@pipeline().parameters.alert_webhook_url",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "@concat('{\\\"title\\\":\\\"ADF ALERT - Completeness Check FAILED\\\",\\\"text\\\":\\\"Pipeline: pl_master_c360_ingest | RunId: ', pipeline().RunId, ' | Critical incomplete: ', string(activity('ValidateCompleteness').output.firstRow.critical_incomplete), ' of ', string(activity('ValidateCompleteness').output.firstRow.total_active), ' active. Sources with data: ', string(activity('ValidateCompleteness').output.firstRow.sources_with_data), '\\\"}')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "FailCompletenessCheck",
+									"type": "Fail",
+									"dependsOn": [
+										{
+											"activity": "AlertCompletenessCheckFailed",
+											"dependencyConditions": [
+												"Succeeded",
+												"Failed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"message": {
+											"value": "@concat('COMPLETENESS CHECK FAILED. Critical incomplete: ', string(activity('ValidateCompleteness').output.firstRow.critical_incomplete), ' of ', string(activity('ValidateCompleteness').output.firstRow.total_active), ' active sources.')",
+											"type": "Expression"
+										},
+										"errorCode": "COMPLETENESS_CHECK_FAILED"
+									}
+								}
+							],
+							"ifTrueActivities": [
+								{
+									"name": "BronzeIngestionComplete",
+									"type": "Wait",
+									"dependsOn": [],
+									"userProperties": [],
+									"typeProperties": {
+										"waitTimeInSeconds": 1
+									}
+								}
+							]
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"force_full_load": {
+						"type": "bool",
+						"defaultValue": false
+					},
+					"alert_webhook_url": {
+						"type": "string"
+					}
+				},
+				"folder": {
+					"name": "c360"
+				},
+				"annotations": [],
+				"lastPublishTime": "2026-06-05T19:55:35Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/ds_adls_raw_source')]",
+				"[concat(variables('factoryId'), '/datasets/ds_sql_control_table')]",
+				"[concat(variables('factoryId'), '/pipelines/pl_ingest_filebatch_single')]",
+				"[concat(variables('factoryId'), '/linkedServices/ls_sql_control')]",
+				"[concat(variables('factoryId'), '/pipelines/pl_ingest_cdc_single')]",
+				"[concat(variables('factoryId'), '/pipelines/pl_ingest_api_single')]"
+			]
+		}
+	]
+}
