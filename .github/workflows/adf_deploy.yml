@@ -19,7 +19,7 @@ env:
   AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     RESOURCE_GROUP_DEV: rg-c360-prod
   RESOURCE_GROUP_PROD: rg-c360-prod
-    ADF_NAME_DEV: adf-c360-canadalife
+  ADF_NAME_DEV: adf-c360-canadalife
   ADF_NAME_PROD: adf-c360-canadalife
   ARM_TEMPLATE: adf/arm_templates/ARMTemplateForFactory.json
   ARM_PARAMS_DEV: adf/arm_templates/ARMTemplateParametersForFactory-dev.json
