@@ -1,0 +1,12 @@
+{
+	"name": "ls_adls_c360",
+	"type": "Microsoft.DataFactory/factories/linkedservices",
+	"properties": {
+		"description": "Primary ADLS Gen2 data lake for C360 platform",
+		"annotations": [],
+		"type": "AzureBlobFS",
+		"typeProperties": {
+			"url": "https://adlsc360canadalife.dfs.core.windows.net/"
+		}
+	}
+}

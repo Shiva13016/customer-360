@@ -1,0 +1,27 @@
+{
+	"name": "ds_adls_bronze_metadata",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_adls_c360",
+			"type": "LinkedServiceReference"
+		},
+		"parameters": {
+			"p_bronze_folder": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "Binary",
+		"typeProperties": {
+			"location": {
+				"type": "AzureBlobFSLocation",
+				"folderPath": {
+					"value": "@dataset().p_bronze_folder",
+					"type": "Expression"
+				},
+				"fileSystem": "bronze"
+			}
+		}
+	},
+	"type": "Microsoft.DataFactory/factories/datasets"
+}
