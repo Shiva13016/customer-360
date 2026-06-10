@@ -4,11 +4,6 @@ bundle:
 workspace:
   host: https://adb-7405617611340377.17.azuredatabricks.net
 
-artifacts:
-  default:
-    type: whl
-    build: pip wheel databricks/src -w dist/ --no-deps 2>/dev/null || true
-
 include:
   - resources/*.yml
 
