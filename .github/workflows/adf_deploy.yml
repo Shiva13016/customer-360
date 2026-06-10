@@ -24,7 +24,7 @@ env:
   ARM_TEMPLATE: adf/arm_templates/ARMTemplateForFactory.json
   ARM_PARAMS_DEV: adf/arm_templates/ARMTemplateParametersForFactory-dev.json
   ARM_PARAMS_PROD: adf/arm_templates/ARMTemplateParametersForFactory-prod.json
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Stage 1: Validate ARM Template
@@ -35,103 +35,94 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_sha || github.sha }}
-      - uses: azure/login@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Validate ARM template against DEV
-        run: |
-          echo 'Validating ADF ARM template...'
-          az deployment group validate \
-            --resource-group ${{ env.RESOURCE_GROUP_DEV }} \
-            --template-file ${{ env.ARM_TEMPLATE }} \
-            --parameters @${{ env.ARM_PARAMS_DEV }}
 
-  # Stage 2: Regex check for unresolved dollar-brace patterns
+      - name: Validate ARM Template (DEV)
+        uses: azure/arm-deploy@v1
+        with:
+          subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: ${{ env.RESOURCE_GROUP_DEV }}
+          template: ${{ env.ARM_TEMPLATE }}
+          parameters: ${{ env.ARM_PARAMS_DEV }}
+          deploymentMode: Validate
+
+  # Stage 2: Check for un-substituted variables
   check-vars:
-    name: Check Unresolved Variable Patterns
+    name: Check for Un-substituted Variables
     runs-on: ubuntu-latest
     needs: validate-arm
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.target_sha || github.sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Scan JSON for unresolved patterns
-        run: python scripts/check_vars.py --path adf/
 
-  # Stage 3: Compute quota pre-flight
+      - name: Run variable check script
+        run: python scripts/check_vars.py
+
+  # Stage 3: Quota Pre-flight
   quota-preflight:
     name: Quota Pre-flight Check
     runs-on: ubuntu-latest
     needs: check-vars
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/login@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Run az vm list-skus quota check
-        run: bash scripts/quota_preflight.sh ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-  # Stage 4: Deploy to DEV (on merge to develop)
+      - name: Run quota pre-flight
+        run: bash scripts/quota_preflight.sh
+
+  # Stage 4: Deploy to DEV
   deploy-dev:
     name: Deploy to DEV
     runs-on: ubuntu-latest
     needs: quota-preflight
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment: development
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_sha || github.sha }}
-      - uses: azure/login@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Stop ADF triggers before deploy
-        run: bash scripts/validate_arm.sh stop ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
-      - name: Deploy ARM to DEV
-        uses: azure/arm-deploy@v2
+
+      - name: Deploy ARM Template to DEV
+        uses: azure/arm-deploy@v1
         with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_DEV }}
           template: ${{ env.ARM_TEMPLATE }}
           parameters: ${{ env.ARM_PARAMS_DEV }}
-          deploymentName: adf-c360-dev-${{ github.run_number }}
-      - name: Restart ADF triggers after deploy
-        run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
+          deploymentMode: Incremental
 
-  # Stage 5: Deploy to PROD (on merge to main) - DUAL APPROVAL REQUIRED
-  # Approvers: Engineering Lead + VP Data (Canada Life)
-  # Configure in GitHub repo Settings > Environments > production
+  # Stage 5: Deploy to PROD (requires manual approval)
   deploy-prod:
-    name: Deploy to PROD - Dual Manual Approval Required
+    name: Deploy to PROD
     runs-on: ubuntu-latest
-        needs: [quota-preflight, deploy-dev]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [quota-preflight, deploy-dev]
     environment: production
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_sha || github.sha }}
-      - uses: azure/login@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Stop ADF triggers before deploy
-        run: bash scripts/validate_arm.sh stop ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
-      - name: Deploy ARM to PROD
-        uses: azure/arm-deploy@v2
+
+      - name: Deploy ARM Template to PROD
+        uses: azure/arm-deploy@v1
         with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_PROD }}
           template: ${{ env.ARM_TEMPLATE }}
           parameters: ${{ env.ARM_PARAMS_PROD }}
-          deploymentName: adf-c360-prod-${{ github.run_number }}
-      - name: Restart ADF triggers after deploy
-        run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
-      - name: Tag release
-        run: |
-          git config user.email 'actions@github.com'
-          git config user.name 'GitHub Actions'
-          git tag -a 'adf-prod-${{ github.run_number }}' -m 'PROD deploy run ${{ github.run_number }}'
-          git push origin 'adf-prod-${{ github.run_number }}'
+          deploymentMode: Incremental
