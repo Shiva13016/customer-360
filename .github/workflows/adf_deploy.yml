@@ -1,4 +1,5 @@
 name: ADF CI/CD - Customer 360 Canada Life
+# ADF_BLOB_CONNECTION_STRING secret now configured
 
 on:
   push:
