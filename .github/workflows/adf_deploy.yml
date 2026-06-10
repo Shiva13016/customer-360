@@ -75,7 +75,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Run quota pre-flight
-        run: bash scripts/quota_preflight.sh
+        run: bash scripts/quota_preflight.sh ${{ env.AZURE_SUBSCRIPTION_ID }}
 
   # Stage 4: Deploy to DEV
   deploy-dev:
