@@ -17,12 +17,7 @@
             }
         },
         "linkedServiceSqlDatabase_connectionString": {
-            "reference": {
-                "keyVault": {
-                    "id": "/subscriptions/b68f64f5-49ae-4b7a-81c9-25cf642d4691/resourceGroups/rg-c360-prod/providers/Microsoft.KeyVault/vaults/akv-c360-prod"
-                },
-                "secretName": "ls-sql-database-connection-string"
-            }
+            "value": "placeholder-unused-parameter"
         }
     }
 }
