@@ -1,18 +1,28 @@
 {
-  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-  "contentVersion": "1.0.0.0",
-  "parameters": {
-    "factoryName": {
-      "value": "adf-c360-canadalife"
-    },
-    "location": {
-      "value": "canadacentral"
-    },
-    "linkedServiceBlobStorage_connectionString": {
-      "value": "REPLACE_WITH_PROD_BLOB_CONNECTION_STRING"
-    },
-    "linkedServiceSqlDatabase_connectionString": {
-      "value": "REPLACE_WITH_PROD_SQL_CONNECTION_STRING"
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "value": "adf-c360-canadalife"
+        },
+        "location": {
+            "value": "canadacentral"
+        },
+        "linkedServiceBlobStorage_connectionString": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/b68f64f5-49ae-4b7a-81c9-25cf642d4691/resourceGroups/rg-c360-prod/providers/Microsoft.KeyVault/vaults/akv-c360-prod"
+                },
+                "secretName": "ls-blob-storage-connection-string"
+            }
+        },
+        "linkedServiceSqlDatabase_connectionString": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/b68f64f5-49ae-4b7a-81c9-25cf642d4691/resourceGroups/rg-c360-prod/providers/Microsoft.KeyVault/vaults/akv-c360-prod"
+                },
+                "secretName": "ls-sql-database-connection-string"
+            }
+        }
     }
-  }
 }
