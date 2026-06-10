@@ -1,0 +1,27 @@
+{
+	"$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"value": "adf-c360-canadalife"
+		},
+		"ls_adls_c360_properties_typeProperties_url": {
+			"value": "https://adlsc360canadalife.dfs.core.windows.net/"
+		},
+		"ls_sql_control_properties_typeProperties_server": {
+			"value": "sql-c360-prod.database.windows.net"
+		},
+		"ls_sql_control_properties_typeProperties_database": {
+			"value": "c360-control-db"
+		},
+		"trg_raw_landing_file_arrival_properties_typeProperties_scope": {
+			"value": "/subscriptions/b68f64f5-49ae-4b7a-81c9-25cf642d4691/resourceGroups/rg-c360-prod/providers/Microsoft.Storage/storageAccounts/adlsc360canadalife"
+		},
+		"containerUri": {
+			"value": ""
+		},
+		"containerSasToken": {
+			"value": ""
+		}
+	}
+}
