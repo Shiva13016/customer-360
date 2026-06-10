@@ -47,7 +47,7 @@ jobs:
           subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_DEV }}
           template: ${{ env.ARM_TEMPLATE }}
-          parameters: ${{ env.ARM_PARAMS_DEV }}
+          parameters: ${{ env.ARM_PARAMS_DEV }} linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentMode: Validate
 
   # Stage 2: Check for un-substituted variables
@@ -99,7 +99,7 @@ jobs:
           subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_DEV }}
           template: ${{ env.ARM_TEMPLATE }}
-          parameters: ${{ env.ARM_PARAMS_DEV }}
+          parameters: ${{ env.ARM_PARAMS_DEV }} linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentMode: Incremental
 
   # Stage 5: Deploy to PROD (requires manual approval)
@@ -124,5 +124,5 @@ jobs:
           subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_PROD }}
           template: ${{ env.ARM_TEMPLATE }}
-          parameters: ${{ env.ARM_PARAMS_PROD }}
+          parameters: ${{ env.ARM_PARAMS_PROD }} linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentMode: Incremental
