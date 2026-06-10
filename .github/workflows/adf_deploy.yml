@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run variable check script
-        run: python scripts/check_vars.py
+        run: python scripts/check_vars.py --path adf/
 
   # Stage 3: Quota Pre-flight
   quota-preflight:
