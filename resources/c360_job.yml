@@ -3,8 +3,8 @@ resources:
     c360_pipeline:
       name: C-360
 
-      # Serverless compute - no cluster config needed
-      # Databricks automatically provisions serverless compute per task
+      # Serverless compute - Databricks auto-provisions serverless per task
+      # No cluster config needed when workspace has serverless enabled
 
       tasks:
         # ── VALIDATION LAYER ──────────────────────────────────────────────
@@ -13,56 +13,48 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: adobe_analytics
-          environment_key: serverless
 
         - task_key: validate_call_centre_interactions
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: call_centre_interactions
-          environment_key: serverless
 
         - task_key: validate_climl_seg_fund_contracts
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: climl_seg_fund_contracts
-          environment_key: serverless
 
         - task_key: validate_freedom55_advisor
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: freedom55_advisor
-          environment_key: serverless
 
         - task_key: validate_group_benefits_plan
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: group_benefits_plan
-          environment_key: serverless
 
         - task_key: validate_group_retirement
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: group_retirement
-          environment_key: serverless
 
         - task_key: validate_gvl_policy
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: gvl_policy
-          environment_key: serverless
 
         - task_key: validate_il_policy
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
             base_parameters:
               source: il_policy
-          environment_key: serverless
 
         # ── GATE: all validations must pass ──────────────────────────────
         - task_key: all_validations_complete
@@ -77,7 +69,6 @@ resources:
             - task_key: validate_il_policy
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
-          environment_key: serverless
 
         # ── BRONZE LAYER ─────────────────────────────────────────────────
         - task_key: bronze_delta_group_benefits
@@ -87,7 +78,6 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
             base_parameters:
               source: group_benefits_plan
-          environment_key: serverless
 
         - task_key: bronze_delta_group_retirement
           depends_on:
@@ -96,7 +86,6 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
             base_parameters:
               source: group_retirement
-          environment_key: serverless
 
         - task_key: bronze_delta_gvl_policy
           depends_on:
@@ -105,7 +94,6 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
             base_parameters:
               source: gvl_policy
-          environment_key: serverless
 
         - task_key: bronze_delta_il_policy
           depends_on:
@@ -114,7 +102,6 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
             base_parameters:
               source: il_policy
-          environment_key: serverless
 
         # ── GATE: all bronze must complete ────────────────────────────────
         - task_key: all_bronze_complete
@@ -127,7 +114,6 @@ resources:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
             base_parameters:
               layer: bronze
-          environment_key: serverless
 
         # ── SILVER LAYER ─────────────────────────────────────────────────
         - task_key: silver_batch_processing_engine
@@ -135,7 +121,6 @@ resources:
             - task_key: all_bronze_complete
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Silver_Batch_Processing_Engine
-          environment_key: serverless
 
         # ── GOLD LAYER ────────────────────────────────────────────────────
         - task_key: gold_agg_notebook
@@ -143,11 +128,9 @@ resources:
             - task_key: silver_batch_processing_engine
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/gold_agg_notebook
-          environment_key: serverless
 
         - task_key: gold_batch_processing_engine
           depends_on:
             - task_key: gold_agg_notebook
           notebook_task:
             notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Gold_Batch_Processing_Engine
-          environment_key: serverless
