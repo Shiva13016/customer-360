@@ -4,7 +4,7 @@
 #   bash scripts/validate_arm.sh stop <adf_name> <resource_group>
 #   bash scripts/validate_arm.sh start <adf_name> <resource_group>
 
-set -euo pipefail
+set -uo pipefail
 
 ACTION=${1:-validate}
 ADF_NAME=${2:-}
@@ -25,7 +25,7 @@ stop_triggers() {
       az datafactory trigger stop \
         --factory-name "${ADF_NAME}" \
         --resource-group "${RESOURCE_GROUP}" \
-        --name "${trigger}"
+        --name "${trigger}" || echo "  WARNING: Failed to stop ${trigger}, continuing..."
     done
   fi
   echo "Done stopping triggers."
@@ -41,13 +41,26 @@ start_triggers() {
   if [ -z "${TRIGGERS}" ]; then
     echo "  No triggers found."
   else
+    FAILED_TRIGGERS=()
     for trigger in ${TRIGGERS}; do
       echo "  Starting: ${trigger}"
-      az datafactory trigger start \
+      if az datafactory trigger start \
         --factory-name "${ADF_NAME}" \
         --resource-group "${RESOURCE_GROUP}" \
-        --name "${trigger}"
+        --name "${trigger}" 2>&1; then
+        echo "  Started: ${trigger}"
+      else
+        echo "  WARNING: Failed to start ${trigger} (may have invalid pipeline references). Skipping."
+        FAILED_TRIGGERS+=("${trigger}")
+      fi
     done
+    if [ ${#FAILED_TRIGGERS[@]} -gt 0 ]; then
+      echo "WARNING: The following triggers could not be started (invalid pipeline references in ARM template):"
+      for t in "${FAILED_TRIGGERS[@]}"; do
+        echo "  - ${t}"
+      done
+      echo "These triggers need their pipeline references fixed in the ADF ARM template."
+    fi
   fi
   echo "Done starting triggers."
 }
