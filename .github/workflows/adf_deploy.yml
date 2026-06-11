@@ -11,13 +11,13 @@ name: ADF CI/CD - Customer 360 Canada Life
 on:
   push:
     branches:
-      - 'feature/adf-**'   # Validate on feature branch pushes
-      - develop              # Deploy to DEV when merged into develop
-      - main                 # Deploy to PROD when merged into main
+      - 'feature/adf-**'  # Validate on feature branch pushes
+      - develop            # Deploy to DEV when merged into develop
+      - main               # Deploy to PROD when merged into main
   pull_request:
     branches:
-      - develop   # PR from feature/adf-* → develop
-      - main      # PR from develop → main
+      - develop            # PR from feature/adf-* → develop
+      - main               # PR from develop → main
   workflow_dispatch:
     inputs:
       target_sha:
@@ -54,7 +54,8 @@ jobs:
           az deployment group validate \
             --resource-group ${{ env.RESOURCE_GROUP_DEV }} \
             --template-file ${{ env.ARM_TEMPLATE }} \
-            --parameters @${{ env.ARM_PARAMS_DEV }}
+            --parameters @${{ env.ARM_PARAMS_DEV }} \
+            --parameters linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
 
   # Stage 2: Regex check for unresolved dollar-brace patterns
   check-vars:
@@ -106,7 +107,9 @@ jobs:
           subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_DEV }}
           template: ${{ env.ARM_TEMPLATE }}
-          parameters: ${{ env.ARM_PARAMS_DEV }}
+          parameters: >
+            ${{ env.ARM_PARAMS_DEV }}
+            linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentName: adf-c360-dev-${{ github.run_number }}
       - name: Restart ADF triggers after deploy
         run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
@@ -134,7 +137,9 @@ jobs:
           subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.RESOURCE_GROUP_PROD }}
           template: ${{ env.ARM_TEMPLATE }}
-          parameters: ${{ env.ARM_PARAMS_PROD }}
+          parameters: >
+            ${{ env.ARM_PARAMS_PROD }}
+            linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentName: adf-c360-prod-${{ github.run_number }}
       - name: Restart ADF triggers after deploy
         run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
