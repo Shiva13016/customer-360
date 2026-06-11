@@ -24,7 +24,7 @@ env:
   ARM_TEMPLATE: adf/arm_templates/ARMTemplateForFactory.json
   ARM_PARAMS_DEV: adf/arm_templates/ARMTemplateParametersForFactory-dev.json
   ARM_PARAMS_PROD: adf/arm_templates/ARMTemplateParametersForFactory-prod.json
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Stage 1: Validate ARM Template
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: quota-preflight
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-    environment: development
+    environment: adf-development
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,15 +101,14 @@ jobs:
       - name: Restart ADF triggers after deploy
         run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
 
-  # Stage 5: Deploy to PROD (on merge to main) - DUAL APPROVAL REQUIRED
-  # Approvers: Engineering Lead + VP Data (Canada Life)
-  # Configure in GitHub repo Settings > Environments > production
+  # Stage 5: Deploy to PROD (on merge to main) - MANUAL APPROVAL REQUIRED
+  # Approvers configured in GitHub repo Settings > Environments > adf-production
   deploy-prod:
-    name: Deploy to PROD - Dual Manual Approval Required
+    name: Deploy to PROD - Manual Approval Required
     runs-on: ubuntu-latest
-        needs: [quota-preflight, deploy-dev]
+    needs: [quota-preflight, deploy-dev]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: production
+    environment: adf-production
     steps:
       - uses: actions/checkout@v4
         with:
@@ -129,9 +128,3 @@ jobs:
           deploymentName: adf-c360-prod-${{ github.run_number }}
       - name: Restart ADF triggers after deploy
         run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
-      - name: Tag release
-        run: |
-          git config user.email 'actions@github.com'
-          git config user.name 'GitHub Actions'
-          git tag -a 'adf-prod-${{ github.run_number }}' -m 'PROD deploy run ${{ github.run_number }}'
-          git push origin 'adf-prod-${{ github.run_number }}'
