@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "factoryName": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "linkedServiceBlobStorage_connectionString": {
+      "type": "securestring"
+    },
+    "linkedServiceSqlDatabase_connectionString": {
+      "type": "securestring"
+    }
+  },
+  "variables": {
+    "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+  },
+  "resources": [
+    {
+      "name": "[parameters('factoryName')]",
+      "type": "Microsoft.DataFactory/factories",
+      "apiVersion": "2018-06-01",
+      "location": "[parameters('location')]",
+      "identity": { "type": "SystemAssigned" },
+      "properties": {}
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/ls_BlobStorage_c360')]",
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+      "dependsOn": ["[variables('factoryId')]"],
+      "properties": {
+        "type": "AzureBlobStorage",
+        "typeProperties": {
+          "connectionString": "[parameters('linkedServiceBlobStorage_connectionString')]"
+        }
+      }
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/pl_master_c360_ingest')]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "dependsOn": ["[variables('factoryId')]"],
+      "properties": {
+        "description": "Master Customer 360 ingestion pipeline.",
+        "activities": [],
+        "parameters": {
+          "environment": {
+            "type": "String",
+            "defaultValue": "dev"
+          }
+        }
+      }
+    }
+  ]
+}
