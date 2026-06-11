@@ -1,0 +1,136 @@
+resources:
+  jobs:
+    c360_pipeline:
+      name: C-360
+
+      # Serverless compute - Databricks auto-provisions serverless per task
+      # No cluster config needed when workspace has serverless enabled
+
+      tasks:
+        # ── VALIDATION LAYER ──────────────────────────────────────────────
+        - task_key: validate_adobe_analytics
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: adobe_analytics
+
+        - task_key: validate_call_centre_interactions
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: call_centre_interactions
+
+        - task_key: validate_climl_seg_fund_contracts
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: climl_seg_fund_contracts
+
+        - task_key: validate_freedom55_advisor
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: freedom55_advisor
+
+        - task_key: validate_group_benefits_plan
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: group_benefits_plan
+
+        - task_key: validate_group_retirement
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: group_retirement
+
+        - task_key: validate_gvl_policy
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: gvl_policy
+
+        - task_key: validate_il_policy
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            base_parameters:
+              source: il_policy
+
+        # ── GATE: all validations must pass ──────────────────────────────
+        - task_key: all_validations_complete
+          depends_on:
+            - task_key: validate_adobe_analytics
+            - task_key: validate_call_centre_interactions
+            - task_key: validate_climl_seg_fund_contracts
+            - task_key: validate_freedom55_advisor
+            - task_key: validate_group_benefits_plan
+            - task_key: validate_group_retirement
+            - task_key: validate_gvl_policy
+            - task_key: validate_il_policy
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
+
+        # ── BRONZE LAYER ─────────────────────────────────────────────────
+        - task_key: bronze_delta_group_benefits
+          depends_on:
+            - task_key: all_validations_complete
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            base_parameters:
+              source: group_benefits_plan
+
+        - task_key: bronze_delta_group_retirement
+          depends_on:
+            - task_key: all_validations_complete
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            base_parameters:
+              source: group_retirement
+
+        - task_key: bronze_delta_gvl_policy
+          depends_on:
+            - task_key: all_validations_complete
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            base_parameters:
+              source: gvl_policy
+
+        - task_key: bronze_delta_il_policy
+          depends_on:
+            - task_key: all_validations_complete
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            base_parameters:
+              source: il_policy
+
+        # ── GATE: all bronze must complete ────────────────────────────────
+        - task_key: all_bronze_complete
+          depends_on:
+            - task_key: bronze_delta_group_benefits
+            - task_key: bronze_delta_group_retirement
+            - task_key: bronze_delta_gvl_policy
+            - task_key: bronze_delta_il_policy
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
+            base_parameters:
+              layer: bronze
+
+        # ── SILVER LAYER ─────────────────────────────────────────────────
+        - task_key: silver_batch_processing_engine
+          depends_on:
+            - task_key: all_bronze_complete
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Silver_Batch_Processing_Engine
+
+        # ── GOLD LAYER ────────────────────────────────────────────────────
+        - task_key: gold_agg_notebook
+          depends_on:
+            - task_key: silver_batch_processing_engine
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/gold_agg_notebook
+
+        - task_key: gold_batch_processing_engine
+          depends_on:
+            - task_key: gold_agg_notebook
+          notebook_task:
+            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Gold_Batch_Processing_Engine
