@@ -1,22 +1,40 @@
+# Databricks Asset Bundle (DAB) - Customer 360
+# Commands:
+#   databricks bundle validate
+#   databricks bundle deploy --target development
+#   databricks bundle deploy --target production
+#   databricks bundle run c360_pipeline --target development
+
 bundle:
   name: customer-360
 
+# Global workspace (overridden per target)
 workspace:
   host: https://adb-7405617611340377.17.azuredatabricks.net
+  root_path: /Workspace/Shared/customer-360/${bundle.target}
 
+# Include job and pipeline resource definitions
 include:
   - resources/*.yml
 
+# ─── TARGETS ──────────────────────────────────────────────────────────────────
+
 targets:
+
+  # Development — default target
+  # Notebooks deploy to /Workspace/Shared/customer-360/development/files/notebooks/
   development:
     mode: development
     default: true
     workspace:
       host: https://adb-7405617611340377.17.azuredatabricks.net
+      root_path: /Workspace/Shared/customer-360/development
 
+  # Production — runs as service principal
   production:
     mode: production
     workspace:
       host: https://adb-7405617611340377.17.azuredatabricks.net
+      root_path: /Workspace/Shared/customer-360/production
     run_as:
       user_name: shivakumaryallanti5@gmail.com
