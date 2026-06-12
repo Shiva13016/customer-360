@@ -1,1579 +1,859 @@
 # Databricks notebook source
+# DBTITLE 1,Overview
 # MAGIC %md
-# MAGIC # gold_agg_notebook
+# MAGIC This notebook builds the Customer 360 gold layer from silver outputs.
 # MAGIC
-# MAGIC **Layer:** Gold
-# MAGIC **Purpose:** Builds Gold aggregation views for customer 360.
+# MAGIC Sections:
+# MAGIC * Parameters and runtime controls
+# MAGIC * Gold lineage map and target definitions
+# MAGIC * Shared helper functions and source standardization
+# MAGIC * Gold target builders for G1-G5
+# MAGIC * PLAN / TEST / RUN execution orchestration
 # MAGIC
-# MAGIC **Source path:** `/Users/shivakumaryallanti5@gmail.com/project customer 360/gold_agg_notebook`
+# MAGIC Execution modes:
+# MAGIC * `PLAN`: validate source availability, target lineage, and custom storage paths without building tables
+# MAGIC * `TEST`: build selected gold outputs and preview rows without writing
+# MAGIC * `RUN`: write the selected gold outputs as Delta tables in business-friendly gold ADLS folders and register them in Unity Catalog, then optionally apply row-level security to G4
+# MAGIC
+# MAGIC Scope in this notebook:
+# MAGIC * G1 `gold.customer_360`
+# MAGIC * G2 `gold.regulatory_view`
+# MAGIC * G3 `gold.ml_features`
+# MAGIC * G4 `gold.book_of_business`
+# MAGIC * G5 `gold.kpi_summary`
+# MAGIC
+# MAGIC Compliance audit note:
+# MAGIC * G6 `gold.pipeda_audit` is built in the dedicated [Compliance Audit Notebook](#notebook-2704371916535664)
+# MAGIC
 
 # COMMAND ----------
 
-print("Gold Aggregation Notebook - building customer 360 aggregations...")
+# DBTITLE 1,Parameters and imports
+# ==============================================================================
+# Notebook: gold_agg_notebook
+# Purpose   : Build the Canada Life Customer 360 gold aggregation layer from
+#             silver outputs into a unified medallion gold schema.
+# Notes     :
+#             * Follows the silver notebook PLAN / TEST / RUN pattern.
+#             * G3 intentionally queries full SCD2 history from
+#               policy.individual_life_clean.
+#             * G4 applies Unity Catalog row-level security in RUN mode.
+#             * Dedicated compliance audit logic now lives in Compliance Audit Notebook.
+#             * All consumer-specific outputs are materialized as tables in the
+#               single gold schema to preserve medallion layering.
+#             * Gold outputs are written to business-friendly custom ADLS folders
+#               instead of Unity Catalog managed __unitystorage paths.
+# ==============================================================================
+import json
+import uuid
+from functools import reduce
 
-# COMMAND ----------
+from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
+from pyspark.sql import types as T
+from pyspark.sql.window import Window
 
-{
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {},
-     "inputWidgets": {},
-     "nuid": "820de07e-1e36-488f-8821-bdb7b0852f94",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Overview"
-    }
-   },
-   "source": [
-    "This notebook builds the Customer 360 gold layer from silver outputs.\n",
-    "\n",
-    "Sections:\n",
-    "* Parameters and runtime controls\n",
-    "* Gold lineage map and target definitions\n",
-    "* Shared helper functions and source standardization\n",
-    "* Gold target builders for G1-G5\n",
-    "* PLAN / TEST / RUN execution orchestration\n",
-    "\n",
-    "Execution modes:\n",
-    "* `PLAN`: validate source availability, target lineage, and custom storage paths without building tables\n",
-    "* `TEST`: build selected gold outputs and preview rows without writing\n",
-    "* `RUN`: write the selected gold outputs as Delta tables in business-friendly gold ADLS folders and register them in Unity Catalog, then optionally apply row-level security to G4\n",
-    "\n",
-    "Scope in this notebook:\n",
-    "* G1 `gold.customer_360`\n",
-    "* G2 `gold.regulatory_view`\n",
-    "* G3 `gold.ml_features`\n",
-    "* G4 `gold.book_of_business`\n",
-    "* G5 `gold.kpi_summary`\n",
-    "\n",
-    "Compliance audit note:\n",
-    "* G6 `gold.pipeda_audit` is built in the dedicated [Compliance Audit Notebook](#notebook-2704371916535664)\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 0,
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {
-      "byteLimit": 2048000,
-      "rowLimit": 10000
-     },
-     "inputWidgets": {},
-     "nuid": "fe371266-0605-48c1-9ab2-3f063f566dc6",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Parameters and imports"
-    }
-   },
-   "outputs": [],
-   "source": [
-    "# ==============================================================================\n",
-    "# Notebook: gold_agg_notebook\n",
-    "# Purpose   : Build the Canada Life Customer 360 gold aggregation layer from\n",
-    "#             silver outputs into a unified medallion gold schema.\n",
-    "# Notes     :\n",
-    "#             * Follows the silver notebook PLAN / TEST / RUN pattern.\n",
-    "#             * G3 intentionally queries full SCD2 history from\n",
-    "#               policy.individual_life_clean.\n",
-    "#             * G4 applies Unity Catalog row-level security in RUN mode.\n",
-    "#             * Dedicated compliance audit logic now lives in Compliance Audit Notebook.\n",
-    "#             * All consumer-specific outputs are materialized as tables in the\n",
-    "#               single gold schema to preserve medallion layering.\n",
-    "#             * Gold outputs are written to business-friendly custom ADLS folders\n",
-    "#               instead of Unity Catalog managed __unitystorage paths.\n",
-    "# ==============================================================================\n",
-    "import json\n",
-    "import uuid\n",
-    "from functools import reduce\n",
-    "\n",
-    "from pyspark.sql import DataFrame\n",
-    "from pyspark.sql import functions as F\n",
-    "from pyspark.sql import types as T\n",
-    "from pyspark.sql.window import Window\n",
-    "\n",
-    "for widget_name in [\n",
-    "    \"target_table_name\",\n",
-    "    \"execution_mode\",\n",
-    "    \"catalog_name\",\n",
-    "    \"silver_schema\",\n",
-    "    \"gold_catalog_name\",\n",
-    "    \"apply_security\",\n",
-    "    \"optimize_output\",\n",
-    "]:\n",
-    "    try:\n",
-    "        dbutils.widgets.remove(widget_name)\n",
-    "    except Exception:\n",
-    "        pass\n",
-    "\n",
-    "DEFAULT_CATALOG_NAME = \"dbw_c360_canadalife\"\n",
-    "DEFAULT_SILVER_SCHEMA = \"silver\"\n",
-    "DEFAULT_GOLD_CATALOG_NAME = \"dbw_c360_canadalife\"\n",
-    "DEFAULT_GOLD_BASE_PATH = \"abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold\"\n",
-    "\n",
-    "widget_defaults = {\n",
-    "    \"target_table_name\": \"ALL\",\n",
-    "    \"execution_mode\": \"PLAN\",\n",
-    "    \"catalog_name\": DEFAULT_CATALOG_NAME,\n",
-    "    \"silver_schema\": DEFAULT_SILVER_SCHEMA,\n",
-    "    \"gold_catalog_name\": DEFAULT_GOLD_CATALOG_NAME,\n",
-    "    \"apply_security\": \"true\",\n",
-    "    \"optimize_output\": \"false\",\n",
-    "}\n",
-    "\n",
-    "for widget_name, default_value in widget_defaults.items():\n",
-    "    dbutils.widgets.text(widget_name, default_value)\n",
-    "\n",
-    "catalog_name = dbutils.widgets.get(\"catalog_name\").strip() or DEFAULT_CATALOG_NAME\n",
-    "silver_schema = dbutils.widgets.get(\"silver_schema\").strip() or DEFAULT_SILVER_SCHEMA\n",
-    "gold_catalog_name = dbutils.widgets.get(\"gold_catalog_name\").strip() or DEFAULT_GOLD_CATALOG_NAME\n",
-    "target_table_name = dbutils.widgets.get(\"target_table_name\").strip() or \"ALL\"\n",
-    "execution_mode = (dbutils.widgets.get(\"execution_mode\").strip() or \"PLAN\").upper()\n",
-    "apply_security = dbutils.widgets.get(\"apply_security\").strip().lower() == \"true\"\n",
-    "optimize_output = dbutils.widgets.get(\"optimize_output\").strip().lower() == \"true\"\n",
-    "gold_base_path = DEFAULT_GOLD_BASE_PATH.rstrip(\"/\")\n",
-    "run_id = str(uuid.uuid4())\n",
-    "\n",
-    "job_context_json = dbutils.notebook.entry_point.getDbutils().notebook().getContext().safeToJson()\n",
-    "job_context = json.loads(job_context_json)\n",
-    "job_run_id = (\n",
-    "    job_context.get(\"tags\", {}).get(\"jobRunId\")\n",
-    "    or job_context.get(\"tags\", {}).get(\"multitaskParentRunId\")\n",
-    "    or job_context.get(\"currentRunId\", {}).get(\"id\")\n",
-    "    or job_context.get(\"rootRunId\", {}).get(\"id\")\n",
-    ")\n",
-    "job_task_run_id = job_context.get(\"currentRunId\", {}).get(\"id\") or job_run_id\n",
-    "\n",
-    "if execution_mode not in {\"PLAN\", \"TEST\", \"RUN\"}:\n",
-    "    raise ValueError(\"execution_mode must be one of PLAN, TEST, or RUN\")\n",
-    "\n",
-    "silver_catalog = catalog_name\n",
-    "silver_table_base = f\"{silver_catalog}.{silver_schema}\"\n"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {},
-     "inputWidgets": {},
-     "nuid": "bb3a093a-f1c9-497a-bc33-25beb8593dda",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Configuration summary"
-    }
-   },
-   "source": [
-    "This section defines the gold targets, their silver dependencies, and operational expectations.\n",
-    "\n",
-    "Design choices:\n",
-    "* Gold targets are grouped by consumer use case, but all outputs are written into the single `gold` schema.\n",
-    "* Gold storage uses business-friendly ADLS paths under `abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold/<table_name>/`.\n",
-    "* Current-state tables filter silver `is_current = true` where required.\n",
-    "* G3 deliberately reads full SCD2 history from `policy.individual_life_clean` for churn and lapse features.\n",
-    "* G4 prepares for Unity Catalog row filtering in `RUN` mode.\n",
-    "* G6 is intentionally separated into the dedicated Compliance Audit Notebook.\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 0,
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {
-      "byteLimit": 2048000,
-      "rowLimit": 10000
-     },
-     "inputWidgets": {},
-     "nuid": "2e82d9e8-50f4-4799-8450-2f6207e4c649",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Configuration and target metadata"
-    }
-   },
-   "outputs": [],
-   "source": [
-    "TARGET_CONFIG = {\n",
-    "    \"G1\": {\n",
-    "        \"table_name\": \"customer_360\",\n",
-    "        \"schema\": \"gold\",\n",
-    "        \"description\": \"Wide current-state customer fact\",\n",
-    "        \"sources\": [\n",
-    "            \"customer.master\",\n",
-    "            \"policy.individual_life_enriched\",\n",
-    "            \"policy.disability_ci_clean\",\n",
-    "            \"group_benefits.certificate_coverage_detail\",\n",
-    "            \"group_retirement.member_clean\",\n",
-    "            \"investments.climl_clean\",\n",
-    "            \"interactions.callcentre_clean\",\n",
-    "        ],\n",
-    "        \"write_mode\": \"overwrite\",\n",
-    "    },\n",
-    "    \"G2\": {\n",
-    "        \"table_name\": \"regulatory_view\",\n",
-    "        \"schema\": \"gold\",\n",
-    "        \"description\": \"OSFI and IFRS-oriented aggregate compliance fact\",\n",
-    "        \"sources\": [\n",
-    "            \"policy.individual_life_enriched\",\n",
-    "            \"reinsurance.treaty_clean\",\n",
-    "        ],\n",
-    "        \"write_mode\": \"overwrite\",\n",
-    "    },\n",
-    "    \"G3\": {\n",
-    "        \"table_name\": \"ml_features\",\n",
-    "        \"schema\": \"gold\",\n",
-    "        \"description\": \"Feature store style dataset with full SCD2 lifecycle features\",\n",
-    "        \"sources\": [\n",
-    "            \"policy.individual_life_clean\",\n",
-    "            \"policy.individual_life_enriched\",\n",
-    "            \"policy.disability_ci_clean\",\n",
-    "            \"digital.portal_clean\",\n",
-    "            \"group_retirement.member_clean\",\n",
-    "            \"freedom55.advisor_feed_clean\",\n",
-    "            \"customer.master\",\n",
-    "        ],\n",
-    "        \"write_mode\": \"overwrite\",\n",
-    "    },\n",
-    "    \"G4\": {\n",
-    "        \"table_name\": \"book_of_business\",\n",
-    "        \"schema\": \"gold\",\n",
-    "        \"description\": \"Advisor-scoped book of business with Unity Catalog row filter\",\n",
-    "        \"sources\": [\n",
-    "            \"customer.master\",\n",
-    "            \"freedom55.advisor_feed_clean\",\n",
-    "            \"policy.individual_life_enriched\",\n",
-    "            \"policy.disability_ci_clean\",\n",
-    "        ],\n",
-    "        \"write_mode\": \"overwrite\",\n",
-    "    },\n",
-    "    \"G5\": {\n",
-    "        \"table_name\": \"kpi_summary\",\n",
-    "        \"schema\": \"gold\",\n",
-    "        \"description\": \"Daily executive KPI snapshot\",\n",
-    "        \"sources\": [\n",
-    "            \"customer.master\",\n",
-    "            \"policy.individual_life_clean\",\n",
-    "            \"policy.individual_life_enriched\",\n",
-    "            \"policy.disability_ci_clean\",\n",
-    "            \"digital.portal_clean\",\n",
-    "            \"group_benefits.certificate_coverage_detail\",\n",
-    "            \"group_retirement.member_clean\",\n",
-    "            \"investments.climl_clean\",\n",
-    "            \"interactions.callcentre_clean\",\n",
-    "        ],\n",
-    "        \"write_mode\": \"overwrite\",\n",
-    "    },\n",
-    "}\n",
-    "\n",
-    "TARGET_ORDER = [\"G1\", \"G2\", \"G3\", \"G4\", \"G5\"]\n",
-    "\n",
-    "LINEAGE_MAP_ROWS = [\n",
-    "    (\"customer.master\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"policy.individual_life_enriched\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"policy.disability_ci_clean\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"group_benefits.certificate_coverage_detail\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"group_retirement.member_clean\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"investments.climl_clean\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"interactions.callcentre_clean\", \"G1\", \"gold.customer_360\"),\n",
-    "    (\"policy.individual_life_enriched\", \"G2\", \"gold.regulatory_view\"),\n",
-    "    (\"reinsurance.treaty_clean\", \"G2\", \"gold.regulatory_view\"),\n",
-    "    (\"policy.individual_life_clean\", \"G3\", \"gold.ml_features\"),\n",
-    "    (\"digital.portal_clean\", \"G3\", \"gold.ml_features\"),\n",
-    "    (\"group_retirement.member_clean\", \"G3\", \"gold.ml_features\"),\n",
-    "    (\"freedom55.advisor_feed_clean\", \"G3\", \"gold.ml_features\"),\n",
-    "    (\"customer.master\", \"G3\", \"gold.ml_features\"),\n",
-    "    (\"customer.master\", \"G4\", \"gold.book_of_business\"),\n",
-    "    (\"freedom55.advisor_feed_clean\", \"G4\", \"gold.book_of_business\"),\n",
-    "    (\"policy.individual_life_enriched\", \"G4\", \"gold.book_of_business\"),\n",
-    "    (\"policy.disability_ci_clean\", \"G4\", \"gold.book_of_business\"),\n",
-    "    (\"customer.master\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"policy.individual_life_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"policy.individual_life_enriched\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"policy.disability_ci_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"digital.portal_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"group_benefits.certificate_coverage_detail\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"group_retirement.member_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"investments.climl_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "    (\"interactions.callcentre_clean\", \"G5\", \"gold.kpi_summary\"),\n",
-    "]\n",
-    "\n",
-    "LINEAGE_MAP_DF = spark.createDataFrame(\n",
-    "    LINEAGE_MAP_ROWS,\n",
-    "    [\"silver_source\", \"gold_target_code\", \"gold_target_name\"],\n",
-    ")\n",
-    "\n",
-    "DATAFRAME_CACHE = {}\n",
-    "\n",
-    "\n",
-    "def logical_to_physical(name: str) -> str:\n",
-    "    return name.replace(\".\", \"_\").lower()\n",
-    "\n",
-    "\n",
-    "def silver_table_fqn(logical_name: str) -> str:\n",
-    "    return f\"{silver_catalog}.{silver_schema}.{logical_to_physical(logical_name)}\"\n",
-    "\n",
-    "\n",
-    "def gold_table_fqn(target_code: str) -> str:\n",
-    "    target = TARGET_CONFIG[target_code]\n",
-    "    return f\"{gold_catalog_name}.{target['schema']}.{target['table_name']}\"\n",
-    "\n",
-    "\n",
-    "def gold_table_path(target_code: str) -> str:\n",
-    "    target = TARGET_CONFIG[target_code]\n",
-    "    return f\"{gold_base_path}/{target['table_name']}\"\n"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {},
-     "inputWidgets": {},
-     "nuid": "0b5e6e99-83ce-4056-8c99-984f04796bb1",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Shared helpers"
-    }
-   },
-   "source": [
-    "The helper layer handles:\n",
-    "* source loading and availability checks\n",
-    "* reusable customer-, policy-, and advisor-level aggregates\n",
-    "* Delta writes and optional optimization\n",
-    "* security object creation for G4\n",
-    "* reusable orchestration for G1-G5 outputs\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 0,
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {
-      "byteLimit": 2048000,
-      "rowLimit": 10000
-     },
-     "inputWidgets": {},
-     "nuid": "be8dc059-4ec9-4d70-ae92-ab64d139f04a",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Utility functions"
-    }
-   },
-   "outputs": [],
-   "source": [
-    "def resolve_selected_targets():\n",
-    "    selected = target_table_name.upper()\n",
-    "    if selected == \"ALL\":\n",
-    "        return TARGET_ORDER\n",
-    "    if selected in TARGET_CONFIG:\n",
-    "        return [selected]\n",
-    "    raise ValueError(f\"Unsupported target_table_name: {target_table_name}. Use ALL or one of {TARGET_ORDER}\")\n",
-    "\n",
-    "\n",
-    "def table_exists(table_name: str) -> bool:\n",
-    "    try:\n",
-    "        return spark.catalog.tableExists(table_name)\n",
-    "    except Exception:\n",
-    "        return False\n",
-    "\n",
-    "\n",
-    "def ensure_gold_schema(schema_name: str):\n",
-    "    spark.sql(f\"CREATE SCHEMA IF NOT EXISTS {gold_catalog_name}.{schema_name}\")\n",
-    "\n",
-    "\n",
-    "def read_silver_table(logical_name: str) -> DataFrame:\n",
-    "    table_name = silver_table_fqn(logical_name)\n",
-    "    return spark.table(table_name)\n",
-    "\n",
-    "\n",
-    "def first_existing_column(df_or_columns, candidates: list, dtype: str = \"string\"):\n",
-    "    column_names = df_or_columns if isinstance(df_or_columns, set) else set(df_or_columns.columns)\n",
-    "    for candidate in candidates:\n",
-    "        if candidate in column_names:\n",
-    "            return F.col(candidate).cast(dtype)\n",
-    "    return F.lit(None).cast(dtype)\n",
-    "\n",
-    "\n",
-    "def current_record_filter(df: DataFrame) -> DataFrame:\n",
-    "    return df.filter(F.coalesce(F.col(\"is_current\"), F.lit(True)) == True) if \"is_current\" in df.columns else df\n",
-    "\n",
-    "\n",
-    "def union_all(dfs):\n",
-    "    valid_dfs = [df for df in dfs if df is not None]\n",
-    "    if not valid_dfs:\n",
-    "        raise ValueError(\"union_all received no dataframes\")\n",
-    "    return reduce(lambda left, right: left.unionByName(right, allowMissingColumns=True), valid_dfs)\n",
-    "\n",
-    "\n",
-    "def write_delta_table(df: DataFrame, target_code: str):\n",
-    "    target_fqn = gold_table_fqn(target_code)\n",
-    "    target_path = gold_table_path(target_code)\n",
-    "    temp_view_name = f\"tmp_{logical_to_physical(target_fqn)}_{uuid.uuid4().hex}\"\n",
-    "    df.createOrReplaceTempView(temp_view_name)\n",
-    "    try:\n",
-    "        if table_exists(target_fqn):\n",
-    "            spark.sql(f\"DROP TABLE {target_fqn}\")\n",
-    "        spark.sql(\n",
-    "            f\"\"\"\n",
-    "            CREATE TABLE {target_fqn}\n",
-    "            USING DELTA\n",
-    "            LOCATION '{target_path}'\n",
-    "            AS SELECT * FROM {temp_view_name}\n",
-    "            \"\"\"\n",
-    "        )\n",
-    "    finally:\n",
-    "        try:\n",
-    "            spark.catalog.dropTempView(temp_view_name)\n",
-    "        except Exception:\n",
-    "            pass\n",
-    "    if optimize_output:\n",
-    "        spark.sql(f\"OPTIMIZE {target_fqn}\")\n",
-    "\n",
-    "\n",
-    "def get_cached_df(name: str, builder):\n",
-    "    if name not in DATAFRAME_CACHE:\n",
-    "        DATAFRAME_CACHE[name] = builder()\n",
-    "    return DATAFRAME_CACHE[name]\n",
-    "\n",
-    "\n",
-    "def build_life_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        life_df = current_record_filter(read_silver_table(\"policy.individual_life_enriched\"))\n",
-    "        customer_key = first_existing_column(life_df, [\"life_insured_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        return life_df.groupBy(customer_key).agg(\n",
-    "            F.countDistinct(\"policy_number\").alias(\"policy_count\"),\n",
-    "            F.sum(F.coalesce(F.col(\"annualised_premium\"), F.lit(0.0))).alias(\"total_annualised_life_premium\"),\n",
-    "            F.sum(F.coalesce(F.col(\"face_amount\"), F.lit(0.0))).alias(\"total_life_coverage_amount\"),\n",
-    "            F.max(F.when(F.col(\"term_expiring_90d_flag\") == True, F.lit(1)).otherwise(F.lit(0))).alias(\"term_expiring_90d_flag\"),\n",
-    "            F.max(F.col(\"churn_risk_signal\")).alias(\"churn_risk_signal\"),\n",
-    "            F.min(\"issue_date\").alias(\"first_policy_issue_date\"),\n",
-    "        )\n",
-    "    return get_cached_df(\"life_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def build_dis_ci_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        dis_df = current_record_filter(read_silver_table(\"policy.disability_ci_clean\"))\n",
-    "        customer_key = first_existing_column(dis_df, [\"life_insured_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        claim_status_expr = F.upper(F.coalesce(first_existing_column(dis_df, [\"claim_status\", \"policy_status_code\"], \"string\"), F.lit(\"\")))\n",
-    "        claim_date_expr = first_existing_column(dis_df, [\"claim_date\", \"issue_date\"], \"date\")\n",
-    "        return dis_df.groupBy(customer_key).agg(\n",
-    "            F.max(F.when(F.upper(F.coalesce(F.col(\"product_type_code\"), F.lit(\"\"))).rlike(\"DISABILITY|DI\"), F.lit(1)).otherwise(F.lit(0))).alias(\"has_disability_coverage\"),\n",
-    "            F.max(F.when(F.upper(F.coalesce(F.col(\"product_type_code\"), F.lit(\"\"))).rlike(\"CRITICAL|CI\"), F.lit(1)).otherwise(F.lit(0))).alias(\"has_ci_coverage\"),\n",
-    "            F.max(F.when(claim_status_expr.rlike(\"ACTIVE|OPEN|PENDING\"), F.lit(1)).otherwise(F.lit(0))).alias(\"has_active_claim_flag\"),\n",
-    "            F.count(F.when(claim_date_expr >= F.date_sub(F.current_date(), 90), 1)).alias(\"claim_frequency_3m\"),\n",
-    "        )\n",
-    "    return get_cached_df(\"dis_ci_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def build_group_benefits_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        benefits_df = read_silver_table(\"group_benefits.certificate_coverage_detail\")\n",
-    "        if \"status\" in benefits_df.columns:\n",
-    "            benefits_df = benefits_df.filter(F.upper(F.col(\"status\")) == \"ACTIVE\")\n",
-    "        member_key = first_existing_column(benefits_df, [\"plan_member_id\", \"member_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        plan_sponsor_expr = first_existing_column(benefits_df, [\"plan_sponsor_name\", \"employer_name\"], \"string\")\n",
-    "        coverage_expr = first_existing_column(benefits_df, [\"coverage_type_code\", \"coverage_type\", \"coverage_type_codes_enrolled\"], \"string\")\n",
-    "        return benefits_df.groupBy(member_key).agg(\n",
-    "            F.max(F.lit(1)).alias(\"has_group_benefits\"),\n",
-    "            F.max(plan_sponsor_expr).alias(\"group_plan_sponsor_name\"),\n",
-    "            F.collect_set(coverage_expr).alias(\"group_coverages_enrolled\"),\n",
-    "        )\n",
-    "    return get_cached_df(\"group_benefits_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def build_group_retirement_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        gr_df = current_record_filter(read_silver_table(\"group_retirement.member_clean\"))\n",
-    "        member_key = first_existing_column(gr_df, [\"customer_id\", \"member_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        balance_expr = F.coalesce(\n",
-    "            first_existing_column(gr_df, [\"account_balance_current\", \"account_balance\", \"transaction_amount\"], \"double\"),\n",
-    "            F.lit(0.0),\n",
-    "        )\n",
-    "        contribution_expr = F.coalesce(\n",
-    "            first_existing_column(gr_df, [\"contribution_ytd\", \"employee_contribution_ytd\", \"transaction_amount\"], \"double\"),\n",
-    "            F.lit(0.0),\n",
-    "        )\n",
-    "        return gr_df.groupBy(member_key).agg(\n",
-    "            F.max(F.lit(1)).alias(\"has_group_retirement\"),\n",
-    "            F.sum(balance_expr).alias(\"group_retirement_total_balance\"),\n",
-    "            F.sum(contribution_expr).alias(\"group_retirement_contribution_ytd\"),\n",
-    "        )\n",
-    "    return get_cached_df(\"group_retirement_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def build_investments_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        inv_df = current_record_filter(read_silver_table(\"investments.climl_clean\"))\n",
-    "        annuitant_key = first_existing_column(inv_df, [\"annuitant_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        return inv_df.groupBy(annuitant_key).agg(\n",
-    "            F.max(F.lit(1)).alias(\"has_segregated_fund\"),\n",
-    "            F.sum(F.coalesce(first_existing_column(inv_df, [\"market_value\", \"total_invested_assets\"], \"double\"), F.lit(0.0))).alias(\"total_invested_assets\"),\n",
-    "            F.sum(F.coalesce(first_existing_column(inv_df, [\"maturity_guarantee_amount\", \"maturity_guarantee\"], \"double\"), F.lit(0.0))).alias(\"total_maturity_guarantee\"),\n",
-    "        )\n",
-    "    return get_cached_df(\"investments_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def build_interactions_agg() -> DataFrame:\n",
-    "    def _builder():\n",
-    "        interactions_df = read_silver_table(\"interactions.callcentre_clean\")\n",
-    "        customer_key = first_existing_column(interactions_df, [\"c360_customer_id\", \"customer_id\", \"advisor_id\"], \"string\").alias(\"c360_customer_id\")\n",
-    "        interaction_date_expr = F.coalesce(\n",
-    "            first_existing_column(interactions_df, [\"interaction_timestamp\", \"interaction_date\"], \"date\"),\n",
-    "            F.to_date(\"_ingested_at\"),\n",
-    "        )\n",
-    "        return interactions_df.groupBy(customer_key).agg(\n",
-    "            F.max(interaction_date_expr).alias(\"last_interaction_date\")\n",
-    "        ).withColumn(\n",
-    "            \"days_since_last_interaction\",\n",
-    "            F.datediff(F.current_date(), F.col(\"last_interaction_date\"))\n",
-    "        )\n",
-    "    return get_cached_df(\"interactions_agg\", _builder)\n",
-    "\n",
-    "\n",
-    "def create_or_replace_row_filter_function():\n",
-    "    spark.sql(f\"CREATE SCHEMA IF NOT EXISTS {gold_catalog_name}.security\")\n",
-    "    spark.sql(\n",
-    "        f\"\"\"\n",
-    "        CREATE OR REPLACE FUNCTION {gold_catalog_name}.security.advisor_row_filter(advisor_id_col STRING)\n",
-    "        RETURN is_account_group_member(concat('canada_life_advisor_', advisor_id_col))\n",
-    "        \"\"\"\n",
-    "    )\n",
-    "\n",
-    "\n",
-    "def apply_book_of_business_row_filter():\n",
-    "    create_or_replace_row_filter_function()\n",
-    "    spark.sql(\n",
-    "        f\"ALTER TABLE {gold_table_fqn('G4')} SET ROW FILTER {gold_catalog_name}.security.advisor_row_filter ON (advisor_id)\"\n",
-    "    )\n"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {},
-     "inputWidgets": {},
-     "nuid": "b1c885b9-ded7-4639-8bf8-7f70fe414d61",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Gold builders overview"
-    }
-   },
-   "source": [
-    "Each builder below corresponds to one gold target:\n",
-    "* G1 current-state customer 360 fact\n",
-    "* G2 regulatory aggregate fact with gross/net exposure logic\n",
-    "* G3 ML feature dataset with SCD2 lifecycle features\n",
-    "* G4 advisor fact with row-level security\n",
-    "* G5 daily KPI aggregate fact\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 0,
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {
-      "byteLimit": 2048000,
-      "rowLimit": 10000
-     },
-     "inputWidgets": {},
-     "nuid": "cf0ee6ba-4cc3-4d2b-ae7f-b73f8981d2f0",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Gold target builders"
-    }
-   },
-   "outputs": [],
-   "source": [
-    "def build_g1_customer_360() -> DataFrame:\n",
-    "    customer_source_df = current_record_filter(read_silver_table(\"customer.master\"))\n",
-    "    customer_columns = set(customer_source_df.columns)\n",
-    "    customer_df = customer_source_df.select(\n",
-    "        F.col(\"customer_id\").alias(\"c360_customer_id\"),\n",
-    "        F.concat_ws(\" \", F.col(\"first_name\"), F.col(\"last_name\")).alias(\"full_name_clean\"),\n",
-    "        first_existing_column(customer_columns, [\"date_of_birth\", \"dob\"], \"date\").alias(\"date_of_birth\"),\n",
-    "        first_existing_column(customer_columns, [\"province_clean\", \"province\"], \"string\").alias(\"province_clean\"),\n",
-    "        first_existing_column(customer_columns, [\"advisor_id_primary\", \"advisor_id\"], \"string\").alias(\"advisor_id_primary\"),\n",
-    "        first_existing_column(customer_columns, [\"match_confidence\"], \"string\").alias(\"match_confidence\"),\n",
-    "    ).withColumn(\n",
-    "        \"match_confidence\",\n",
-    "        F.coalesce(F.col(\"match_confidence\"), F.lit(\"MEDIUM\")),\n",
-    "    )\n",
-    "\n",
-    "    g1_df = (\n",
-    "        customer_df\n",
-    "        .join(build_life_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .join(build_dis_ci_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .join(build_group_benefits_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .join(build_group_retirement_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .join(build_investments_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .join(build_interactions_agg(), [\"c360_customer_id\"], \"left\")\n",
-    "        .withColumn(\n",
-    "            \"cross_sell_propensity_ci\",\n",
-    "            F.when(\n",
-    "                (F.coalesce(F.col(\"has_ci_coverage\"), F.lit(0)) == 0)\n",
-    "                & ((F.datediff(F.current_date(), F.col(\"date_of_birth\")) / F.lit(365.0)).between(40, 60)),\n",
-    "                F.lit(1),\n",
-    "            ).otherwise(F.lit(0)),\n",
-    "        )\n",
-    "        .withColumn(\n",
-    "            \"cross_sell_term_conversion_flag\",\n",
-    "            F.coalesce(F.col(\"term_expiring_90d_flag\"), F.lit(0)),\n",
-    "        )\n",
-    "        .withColumn(\n",
-    "            \"total_annual_premium_all_products\",\n",
-    "            F.coalesce(F.col(\"total_annualised_life_premium\"), F.lit(0.0))\n",
-    "            + F.coalesce(F.col(\"group_retirement_contribution_ytd\"), F.lit(0.0)),\n",
-    "        )\n",
-    "        .withColumn(\"gold_target_code\", F.lit(\"G1\"))\n",
-    "        .withColumn(\"gold_run_id\", F.lit(run_id))\n",
-    "        .withColumn(\"gold_refreshed_at\", F.current_timestamp())\n",
-    "    )\n",
-    "    return g1_df\n",
-    "\n",
-    "\n",
-    "def build_g2_regulatory_view() -> DataFrame:\n",
-    "    life_df = current_record_filter(read_silver_table(\"policy.individual_life_enriched\"))\n",
-    "    treaty_df = current_record_filter(read_silver_table(\"reinsurance.treaty_clean\"))\n",
-    "\n",
-    "    gross_df = life_df.groupBy(\n",
-    "        F.lit(\"INDIVIDUAL_LIFE\").alias(\"product_line\"),\n",
-    "        F.col(\"product_type_code_canonical\").alias(\"product_type_code\"),\n",
-    "        F.col(\"province_clean\").alias(\"province\"),\n",
-    "        F.col(\"policy_status_canonical\").alias(\"policy_status\"),\n",
-    "    ).agg(\n",
-    "        F.count(\"policy_number\").alias(\"policy_count\"),\n",
-    "        F.sum(F.coalesce(F.col(\"face_amount\"), F.lit(0.0))).alias(\"gross_face_amount\"),\n",
-    "        F.sum(F.coalesce(F.col(\"annualised_premium\"), F.lit(0.0))).alias(\"gross_annualised_premium\"),\n",
-    "        F.sum(\n",
-    "            F.when(F.col(\"issue_date\") >= F.lit(\"2023-01-01\"), F.coalesce(F.col(\"annualised_premium\"), F.lit(0.0))).otherwise(F.lit(0.0))\n",
-    "        ).alias(\"ifrs17_premium\"),\n",
-    "    )\n",
-    "\n",
-    "    treaty_to_policy_df = life_df.select(\n",
-    "        F.col(\"policy_number\").alias(\"life_policy_number\"),\n",
-    "        F.col(\"product_type_code_canonical\"),\n",
-    "        F.col(\"province_clean\"),\n",
-    "        F.col(\"policy_status_canonical\"),\n",
-    "    ).dropDuplicates([\"life_policy_number\"])\n",
-    "\n",
-    "    ceded_df = treaty_df.alias(\"t\").join(\n",
-    "        treaty_to_policy_df.alias(\"l\"),\n",
-    "        F.col(\"t.policy_number\") == F.col(\"l.life_policy_number\"),\n",
-    "        \"left\",\n",
-    "    ).groupBy(\n",
-    "        F.lit(\"INDIVIDUAL_LIFE\").alias(\"product_line\"),\n",
-    "        F.coalesce(F.col(\"l.product_type_code_canonical\"), F.col(\"t.product_type_code\"), F.lit(\"UNKNOWN\")).alias(\"product_type_code\"),\n",
-    "        F.col(\"l.province_clean\").alias(\"province\"),\n",
-    "        F.coalesce(F.col(\"l.policy_status_canonical\"), F.col(\"t.policy_status_code\"), F.lit(\"UNKNOWN\")).alias(\"policy_status\"),\n",
-    "    ).agg(\n",
-    "        F.sum(F.coalesce(F.col(\"t.ceded_amount\"), F.lit(0.0))).alias(\"ceded_face_amount\")\n",
-    "    )\n",
-    "\n",
-    "    return gross_df.join(ceded_df, [\"product_line\", \"product_type_code\", \"province\", \"policy_status\"], \"left\").withColumn(\n",
-    "        \"ceded_face_amount\", F.coalesce(F.col(\"ceded_face_amount\"), F.lit(0.0))\n",
-    "    ).withColumn(\n",
-    "        \"net_face_amount\", F.col(\"gross_face_amount\") - F.col(\"ceded_face_amount\")\n",
-    "    ).withColumn(\n",
-    "        \"gold_target_code\", F.lit(\"G2\")\n",
-    "    ).withColumn(\n",
-    "        \"gold_run_id\", F.lit(run_id)\n",
-    "    ).withColumn(\n",
-    "        \"gold_refreshed_at\", F.current_timestamp()\n",
-    "    )\n",
-    "\n",
-    "\n",
-    "def build_g3_ml_features() -> DataFrame:\n",
-    "    customer_source_df = current_record_filter(read_silver_table(\"customer.master\"))\n",
-    "    customer_columns = set(customer_source_df.columns)\n",
-    "    customer_df = customer_source_df.select(\n",
-    "        F.col(\"customer_id\").alias(\"c360_customer_id\"),\n",
-    "        first_existing_column(customer_columns, [\"match_confidence\"], \"string\").alias(\"match_confidence\"),\n",
-    "        first_existing_column(customer_columns, [\"advisor_id_primary\", \"advisor_id\"], \"string\").alias(\"advisor_id\"),\n",
-    "    ).withColumn(\n",
-    "        \"match_confidence\",\n",
-    "        F.coalesce(F.col(\"match_confidence\"), F.lit(\"MEDIUM\")),\n",
-    "    )\n",
-    "    life_current_df = current_record_filter(read_silver_table(\"policy.individual_life_enriched\"))\n",
-    "    life_history_df = read_silver_table(\"policy.individual_life_clean\")\n",
-    "    digital_df = read_silver_table(\"digital.portal_clean\")\n",
-    "    retirement_df = current_record_filter(read_silver_table(\"group_retirement.member_clean\"))\n",
-    "    advisor_df = current_record_filter(read_silver_table(\"freedom55.advisor_feed_clean\"))\n",
-    "\n",
-    "    policy_features_df = life_current_df.groupBy(first_existing_column(life_current_df, [\"life_insured_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")).agg(\n",
-    "        F.datediff(F.current_date(), F.min(\"issue_date\")).alias(\"policy_tenure_days\"),\n",
-    "        F.sum(\n",
-    "            F.when(F.col(\"policy_status_canonical\") == \"INFORCE\", F.coalesce(F.col(\"annualised_premium\"), F.lit(0.0))).otherwise(F.lit(0.0))\n",
-    "        ).alias(\"total_premium_12m\"),\n",
-    "    )\n",
-    "\n",
-    "    history_features_df = life_history_df.groupBy(first_existing_column(life_history_df, [\"life_insured_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")).agg(\n",
-    "        F.sum(F.when(F.upper(F.coalesce(F.col(\"policy_status_code\"), F.lit(\"\"))) == \"LAPSED\", F.lit(1)).otherwise(F.lit(0))).alias(\"lapse_count_lifetime\"),\n",
-    "        F.sum(F.when(F.upper(F.coalesce(F.col(\"policy_status_code\"), F.lit(\"\"))) == \"REINSTATED\", F.lit(1)).otherwise(F.lit(0))).alias(\"reinstatement_count\"),\n",
-    "    )\n",
-    "\n",
-    "    login_points_expr = F.sum(\n",
-    "        F.coalesce(\n",
-    "            first_existing_column(digital_df, [\"logins_90d\"], \"double\"),\n",
-    "            F.when(F.to_date(F.col(\"event_timestamp\")) >= F.date_sub(F.current_date(), 90), F.lit(1.0)).otherwise(F.lit(0.0)),\n",
-    "        )\n",
-    "    ) * F.lit(2.0)\n",
-    "\n",
-    "    download_points_expr = F.sum(\n",
-    "        F.coalesce(\n",
-    "            first_existing_column(digital_df, [\"doc_downloads_90d\"], \"double\"),\n",
-    "            F.when(\n",
-    "                F.upper(F.coalesce(F.col(\"event_type\"), F.lit(\"\"))).like(\"%DOWNLOAD%\"),\n",
-    "                F.lit(1.0),\n",
-    "            ).otherwise(F.lit(0.0)),\n",
-    "        )\n",
-    "    )\n",
-    "\n",
-    "    digital_features_df = (\n",
-    "        digital_df.groupBy(first_existing_column(digital_df, [\"c360_customer_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\"))\n",
-    "        .agg((login_points_expr + download_points_expr).alias(\"engagement_points\"))\n",
-    "        .withColumn(\"digital_engagement_score\", F.col(\"engagement_points\") / F.lit(90.0))\n",
-    "        .drop(\"engagement_points\")\n",
-    "    )\n",
-    "\n",
-    "    retirement_features_df = retirement_df.groupBy(first_existing_column(retirement_df, [\"customer_id\", \"member_id\"], \"string\").alias(\"c360_customer_id\")).agg(\n",
-    "        F.sum(F.coalesce(first_existing_column(retirement_df, [\"account_balance_current\", \"account_balance\", \"transaction_amount\"], \"double\"), F.lit(0.0))).alias(\"group_retirement_balance\")\n",
-    "    )\n",
-    "\n",
-    "    advisor_features_df = advisor_df.groupBy(F.col(\"advisor_id\")).agg(\n",
-    "        F.datediff(\n",
-    "            F.current_date(),\n",
-    "            F.min(first_existing_column(advisor_df, [\"advisor_start_date\", \"assignment_start_date\", \"valuation_date\"], \"date\")),\n",
-    "        ).alias(\"advisor_tenure_days\")\n",
-    "    )\n",
-    "\n",
-    "    claim_features_df = build_dis_ci_agg().select(\"c360_customer_id\", \"claim_frequency_3m\")\n",
-    "\n",
-    "    return (\n",
-    "        customer_df\n",
-    "        .join(policy_features_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(history_features_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(claim_features_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(digital_features_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(retirement_features_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(advisor_features_df, [\"advisor_id\"], \"left\")\n",
-    "        .withColumn(\"gold_target_code\", F.lit(\"G3\"))\n",
-    "        .withColumn(\"gold_run_id\", F.lit(run_id))\n",
-    "        .withColumn(\"gold_refreshed_at\", F.current_timestamp())\n",
-    "    )\n",
-    "\n",
-    "\n",
-    "def build_g4_book_of_business() -> DataFrame:\n",
-    "    customer_source_df = current_record_filter(read_silver_table(\"customer.master\"))\n",
-    "    customer_columns = set(customer_source_df.columns)\n",
-    "    customer_df = customer_source_df.select(\n",
-    "        F.coalesce(\n",
-    "            first_existing_column(customer_columns, [\"advisor_id_primary\"], \"string\"),\n",
-    "            first_existing_column(customer_columns, [\"advisor_id\"], \"string\"),\n",
-    "        ).alias(\"advisor_id\"),\n",
-    "        F.col(\"customer_id\").alias(\"c360_customer_id\"),\n",
-    "        F.concat_ws(\" \", F.col(\"first_name\"), F.col(\"last_name\")).alias(\"full_name_clean\"),\n",
-    "        first_existing_column(customer_columns, [\"province_clean\", \"province\"], \"string\").alias(\"province_clean\"),\n",
-    "        first_existing_column(customer_columns, [\"date_of_birth\", \"dob\"], \"date\").alias(\"date_of_birth\"),\n",
-    "    ).filter(F.col(\"advisor_id\").isNotNull())\n",
-    "    advisor_source_df = current_record_filter(read_silver_table(\"freedom55.advisor_feed_clean\"))\n",
-    "    advisor_columns = set(advisor_source_df.columns)\n",
-    "    advisor_df = advisor_source_df.select(\n",
-    "        \"advisor_id\",\n",
-    "        F.coalesce(\n",
-    "            first_existing_column(advisor_columns, [\"advisor_name\"], \"string\"),\n",
-    "            F.concat_ws(\" \", first_existing_column(advisor_columns, [\"advisor_first_name\"], \"string\"), first_existing_column(advisor_columns, [\"advisor_last_name\"], \"string\")),\n",
-    "        ).alias(\"advisor_name\"),\n",
-    "        F.coalesce(first_existing_column(advisor_columns, [\"advisor_branch\", \"branch_name\", \"scenario_name\"], \"string\"), F.lit(\"UNKNOWN\")).alias(\"advisor_branch\"),\n",
-    "    ).dropDuplicates([\"advisor_id\"])\n",
-    "\n",
-    "    life_df = build_life_agg()\n",
-    "    dis_df = build_dis_ci_agg()\n",
-    "\n",
-    "    return (\n",
-    "        customer_df\n",
-    "        .join(advisor_df, [\"advisor_id\"], \"left\")\n",
-    "        .join(life_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .join(dis_df, [\"c360_customer_id\"], \"left\")\n",
-    "        .withColumn(\"advisor_name\", F.coalesce(F.col(\"advisor_name\"), F.col(\"advisor_id\")))\n",
-    "        .withColumn(\"advisor_branch\", F.coalesce(F.col(\"advisor_branch\"), F.lit(\"UNKNOWN\")))\n",
-    "        .withColumn(\n",
-    "            \"disability_gap_flag\",\n",
-    "            F.when(F.coalesce(F.col(\"has_disability_coverage\"), F.lit(0)) == 0, F.lit(1)).otherwise(F.lit(0)),\n",
-    "        )\n",
-    "        .withColumn(\n",
-    "            \"ci_cross_sell_flag\",\n",
-    "            F.when(\n",
-    "                (F.coalesce(F.col(\"has_ci_coverage\"), F.lit(0)) == 0)\n",
-    "                & ((F.datediff(F.current_date(), F.col(\"date_of_birth\")) / F.lit(365.0)).between(40, 60)),\n",
-    "                F.lit(1),\n",
-    "            ).otherwise(F.lit(0)),\n",
-    "        )\n",
-    "        .withColumn(\"gold_target_code\", F.lit(\"G4\"))\n",
-    "        .withColumn(\"gold_run_id\", F.lit(run_id))\n",
-    "        .withColumn(\"gold_refreshed_at\", F.current_timestamp())\n",
-    "    )\n",
-    "\n",
-    "\n",
-    "def build_g5_kpi_summary() -> DataFrame:\n",
-    "    customer_df = current_record_filter(read_silver_table(\"customer.master\")).select(F.col(\"customer_id\").alias(\"c360_customer_id\"))\n",
-    "    life_clean_df = read_silver_table(\"policy.individual_life_clean\")\n",
-    "    life_enriched_df = current_record_filter(read_silver_table(\"policy.individual_life_enriched\"))\n",
-    "    digital_df = read_silver_table(\"digital.portal_clean\")\n",
-    "\n",
-    "    first_policy_df = life_enriched_df.groupBy(first_existing_column(life_enriched_df, [\"life_insured_id\", \"customer_id\"], \"string\").alias(\"c360_customer_id\")).agg(\n",
-    "        F.min(\"issue_date\").alias(\"first_policy_date\")\n",
-    "    )\n",
-    "\n",
-    "    base_df = customer_df.join(first_policy_df, [\"c360_customer_id\"], \"left\")\n",
-    "\n",
-    "    metrics_df = base_df.agg(\n",
-    "        F.current_date().alias(\"kpi_date\"),\n",
-    "        F.countDistinct(F.when(F.col(\"first_policy_date\") >= F.date_sub(F.current_date(), 7), F.col(\"c360_customer_id\"))).alias(\"new_customers_7d\"),\n",
-    "    )\n",
-    "\n",
-    "    active_policy_count_df = life_enriched_df.agg(\n",
-    "        F.countDistinct(F.when(F.col(\"policy_status_canonical\") == \"INFORCE\", F.col(\"policy_number\"))).alias(\"active_individual_life_policies\"),\n",
-    "        F.sum(\n",
-    "            F.when(\n",
-    "                (F.col(\"policy_status_canonical\") == \"INFORCE\")\n",
-    "                & (F.date_trunc(\"month\", F.col(\"issue_date\")) == F.date_trunc(\"month\", F.current_date())),\n",
-    "                F.coalesce(F.col(\"annualised_premium\"), F.lit(0.0)),\n",
-    "            ).otherwise(F.lit(0.0))\n",
-    "        ).alias(\"gwp_mtd_individual_life\"),\n",
-    "    )\n",
-    "\n",
-    "    churn_df = life_clean_df.agg(\n",
-    "        (\n",
-    "            F.countDistinct(\n",
-    "                F.when(\n",
-    "                    (F.upper(F.coalesce(F.col(\"policy_status_code\"), F.lit(\"\"))) == \"LAPSED\")\n",
-    "                    & (F.col(\"effective_date\") >= F.date_sub(F.current_date(), 30)),\n",
-    "                    F.col(\"policy_number\"),\n",
-    "                )\n",
-    "            )\n",
-    "            / F.nullif(\n",
-    "                F.countDistinct(\n",
-    "                    F.when(\n",
-    "                        (F.col(\"effective_date\") <= F.date_sub(F.current_date(), 30))\n",
-    "                        & ((F.col(\"expiry_date\") > F.date_sub(F.current_date(), 30)) | F.col(\"expiry_date\").isNull()),\n",
-    "                        F.col(\"policy_number\"),\n",
-    "                    )\n",
-    "                ),\n",
-    "                F.lit(0),\n",
-    "            )\n",
-    "        ).alias(\"churn_rate_30d\")\n",
-    "    )\n",
-    "\n",
-    "    total_customers = customer_df.agg(F.countDistinct(\"c360_customer_id\").alias(\"total_customers\")).collect()[0][0]\n",
-    "    digital_customer_expr = first_existing_column(digital_df, [\"c360_customer_id\", \"customer_id\"], \"string\")\n",
-    "    digital_activity_date_expr = F.coalesce(first_existing_column(digital_df, [\"last_portal_login\"], \"date\"), F.to_date(\"event_timestamp\"))\n",
-    "    digital_adoption_df = digital_df.agg(\n",
-    "        (\n",
-    "            F.countDistinct(\n",
-    "                F.when(\n",
-    "                    digital_activity_date_expr >= F.date_sub(F.current_date(), 90),\n",
-    "                    digital_customer_expr,\n",
-    "                )\n",
-    "            )\n",
-    "            / F.nullif(F.lit(total_customers), F.lit(0))\n",
-    "        ).alias(\"digital_adoption_rate_90d\")\n",
-    "    )\n",
-    "\n",
-    "    result_df = metrics_df.crossJoin(active_policy_count_df).crossJoin(churn_df).crossJoin(digital_adoption_df)\n",
-    "    return result_df.withColumn(\"gold_target_code\", F.lit(\"G5\")).withColumn(\"gold_run_id\", F.lit(run_id)).withColumn(\"gold_refreshed_at\", F.current_timestamp())\n",
-    "\n",
-    "\n",
-    "TARGET_BUILDERS = {\n",
-    "    \"G1\": build_g1_customer_360,\n",
-    "    \"G2\": build_g2_regulatory_view,\n",
-    "    \"G3\": build_g3_ml_features,\n",
-    "    \"G4\": build_g4_book_of_business,\n",
-    "    \"G5\": build_g5_kpi_summary,\n",
-    "}\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": 0,
-   "metadata": {
-    "application/vnd.databricks.v1+cell": {
-     "cellMetadata": {
-      "byteLimit": 2048000,
-      "rowLimit": 10000
-     },
-     "inputWidgets": {},
-     "nuid": "53902155-7903-4a6d-b1b4-db53db4824f4",
-     "showTitle": true,
-     "tableResultSettingsMap": {},
-     "title": "Execution and orchestration"
-    }
-   },
-   "outputs": [
-    {
-     "output_type": "display_data",
-     "data": {
-      "text/html": [
-       "<style scoped>\n",
-       "  .table-result-container {\n",
-       "    max-height: 300px;\n",
-       "    overflow: auto;\n",
-       "  }\n",
-       "  table, th, td {\n",
-       "    border: 1px solid black;\n",
-       "    border-collapse: collapse;\n",
-       "  }\n",
-       "  th, td {\n",
-       "    padding: 5px;\n",
-       "  }\n",
-       "  th {\n",
-       "    text-align: left;\n",
-       "  }\n",
-       "</style><div class='table-result-container'><table class='table-result'><thead style='background-color: white'><tr><th>c360_customer_id</th><th>advisor_id</th><th>full_name_clean</th><th>province_clean</th><th>date_of_birth</th><th>advisor_name</th><th>advisor_branch</th><th>policy_count</th><th>total_annualised_life_premium</th><th>total_life_coverage_amount</th><th>term_expiring_90d_flag</th><th>churn_risk_signal</th><th>first_policy_issue_date</th><th>has_disability_coverage</th><th>has_ci_coverage</th><th>has_active_claim_flag</th><th>claim_frequency_3m</th><th>disability_gap_flag</th><th>ci_cross_sell_flag</th><th>gold_target_code</th><th>gold_run_id</th><th>gold_refreshed_at</th></tr></thead><tbody><tr><td>00003ea1-d541-4496-945d-3982a91e78d5</td><td>ADV-9460</td><td>Kenneth Johnson</td><td>SK</td><td>null</td><td>ADV-9460</td><td>UNKNOWN</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>1</td><td>0</td><td>G4</td><td>1faada90-182e-45be-bf48-ee526588063d</td><td>2026-06-07T05:52:55.642Z</td></tr><tr><td>00009329-9e67-43e8-a83f-c5b224dcdace</td><td>ADV-1249</td><td>Kayla Shepard</td><td>PE</td><td>null</td><td>ADV-1249</td><td>UNKNOWN</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>1</td><td>0</td><td>G4</td><td>1faada90-182e-45be-bf48-ee526588063d</td><td>2026-06-07T05:52:55.642Z</td></tr><tr><td>000104a1-1298-4bac-b50c-b56131319fd5</td><td>ADV-2819</td><td>Lawrence Williams</td><td>NB</td><td>null</td><td>ADV-2819</td><td>UNKNOWN</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>1</td><td>0</td><td>G4</td><td>1faada90-182e-45be-bf48-ee526588063d</td><td>2026-06-07T05:52:55.642Z</td></tr><tr><td>00022489-78d0-424f-aa1b-7b8299e8823a</td><td>ADV-2422</td><td>Michael Barker</td><td>SK</td><td>null</td><td>ADV-2422</td><td>UNKNOWN</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>1</td><td>0</td><td>G4</td><td>1faada90-182e-45be-bf48-ee526588063d</td><td>2026-06-07T05:52:55.642Z</td></tr><tr><td>00024bf8-48b3-4b7b-8fd4-00fc2ef9c347</td><td>ADV-3134</td><td>Rebecca Villa</td><td>PE</td><td>null</td><td>ADV-3134</td><td>UNKNOWN</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>null</td><td>1</td><td>0</td><td>G4</td><td>1faada90-182e-45be-bf48-ee526588063d</td><td>2026-06-07T05:52:55.642Z</td></tr></tbody></table></div>"
-      ]
-     },
-     "metadata": {
-      "application/vnd.databricks.v1+output": {
-       "addedWidgets": {},
-       "aggData": [],
-       "aggError": "",
-       "aggOverflow": false,
-       "aggSchema": [],
-       "aggSeriesLimitReached": false,
-       "aggType": "",
-       "arguments": {},
-       "columnCustomDisplayInfos": {},
-       "data": [
-        [
-         "00003ea1-d541-4496-945d-3982a91e78d5",
-         "ADV-9460",
-         "Kenneth Johnson",
-         "SK",
-         null,
-         "ADV-9460",
-         "UNKNOWN",
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         1,
-         0,
-         "G4",
-         "1faada90-182e-45be-bf48-ee526588063d",
-         "2026-06-07T05:52:55.642Z"
-        ],
-        [
-         "00009329-9e67-43e8-a83f-c5b224dcdace",
-         "ADV-1249",
-         "Kayla Shepard",
-         "PE",
-         null,
-         "ADV-1249",
-         "UNKNOWN",
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         1,
-         0,
-         "G4",
-         "1faada90-182e-45be-bf48-ee526588063d",
-         "2026-06-07T05:52:55.642Z"
-        ],
-        [
-         "000104a1-1298-4bac-b50c-b56131319fd5",
-         "ADV-2819",
-         "Lawrence Williams",
-         "NB",
-         null,
-         "ADV-2819",
-         "UNKNOWN",
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         1,
-         0,
-         "G4",
-         "1faada90-182e-45be-bf48-ee526588063d",
-         "2026-06-07T05:52:55.642Z"
-        ],
-        [
-         "00022489-78d0-424f-aa1b-7b8299e8823a",
-         "ADV-2422",
-         "Michael Barker",
-         "SK",
-         null,
-         "ADV-2422",
-         "UNKNOWN",
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         1,
-         0,
-         "G4",
-         "1faada90-182e-45be-bf48-ee526588063d",
-         "2026-06-07T05:52:55.642Z"
-        ],
-        [
-         "00024bf8-48b3-4b7b-8fd4-00fc2ef9c347",
-         "ADV-3134",
-         "Rebecca Villa",
-         "PE",
-         null,
-         "ADV-3134",
-         "UNKNOWN",
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         null,
-         1,
-         0,
-         "G4",
-         "1faada90-182e-45be-bf48-ee526588063d",
-         "2026-06-07T05:52:55.642Z"
-        ]
-       ],
-       "datasetInfos": [],
-       "dbfsResultPath": null,
-       "isJsonSchema": true,
-       "metadata": {},
-       "overflow": false,
-       "plotOptions": {
-        "customPlotOptions": {},
-        "displayType": "table",
-        "pivotAggregation": null,
-        "pivotColumns": null,
-        "xColumns": null,
-        "yColumns": null
-       },
-       "removedWidgets": [],
-       "schema": [
-        {
-         "metadata": "{}",
-         "name": "c360_customer_id",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "advisor_id",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "full_name_clean",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "province_clean",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "date_of_birth",
-         "type": "\"date\""
-        },
-        {
-         "metadata": "{}",
-         "name": "advisor_name",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "advisor_branch",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "policy_count",
-         "type": "\"long\""
-        },
-        {
-         "metadata": "{}",
-         "name": "total_annualised_life_premium",
-         "type": "\"double\""
-        },
-        {
-         "metadata": "{}",
-         "name": "total_life_coverage_amount",
-         "type": "\"double\""
-        },
-        {
-         "metadata": "{}",
-         "name": "term_expiring_90d_flag",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "churn_risk_signal",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "first_policy_issue_date",
-         "type": "\"date\""
-        },
-        {
-         "metadata": "{}",
-         "name": "has_disability_coverage",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "has_ci_coverage",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "has_active_claim_flag",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "claim_frequency_3m",
-         "type": "\"long\""
-        },
-        {
-         "metadata": "{}",
-         "name": "disability_gap_flag",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "ci_cross_sell_flag",
-         "type": "\"integer\""
-        },
-        {
-         "metadata": "{}",
-         "name": "gold_target_code",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "gold_run_id",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "gold_refreshed_at",
-         "type": "\"timestamp\""
-        }
-       ],
-       "type": "table"
-      }
-     },
-     "output_type": "display_data"
-    },
-    {
-     "output_type": "display_data",
-     "data": {
-      "text/html": [
-       "<style scoped>\n",
-       "  .table-result-container {\n",
-       "    max-height: 300px;\n",
-       "    overflow: auto;\n",
-       "  }\n",
-       "  table, th, td {\n",
-       "    border: 1px solid black;\n",
-       "    border-collapse: collapse;\n",
-       "  }\n",
-       "  th, td {\n",
-       "    padding: 5px;\n",
-       "  }\n",
-       "  th {\n",
-       "    text-align: left;\n",
-       "  }\n",
-       "</style><div class='table-result-container'><table class='table-result'><thead style='background-color: white'><tr><th>gold_target_code</th><th>gold_table_fqn</th><th>gold_storage_path</th><th>preview_rows</th><th>status</th></tr></thead><tbody><tr><td>G4</td><td>dbw_c360_canadalife.gold.book_of_business</td><td>abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold/book_of_business</td><td>5</td><td>PREVIEWED</td></tr></tbody></table></div>"
-      ]
-     },
-     "metadata": {
-      "application/vnd.databricks.v1+output": {
-       "addedWidgets": {},
-       "aggData": [],
-       "aggError": "",
-       "aggOverflow": false,
-       "aggSchema": [],
-       "aggSeriesLimitReached": false,
-       "aggType": "",
-       "arguments": {},
-       "columnCustomDisplayInfos": {},
-       "data": [
-        [
-         "G4",
-         "dbw_c360_canadalife.gold.book_of_business",
-         "abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold/book_of_business",
-         5,
-         "PREVIEWED"
-        ]
-       ],
-       "datasetInfos": [],
-       "dbfsResultPath": null,
-       "isJsonSchema": true,
-       "metadata": {},
-       "overflow": false,
-       "plotOptions": {
-        "customPlotOptions": {},
-        "displayType": "table",
-        "pivotAggregation": null,
-        "pivotColumns": null,
-        "xColumns": null,
-        "yColumns": null
-       },
-       "removedWidgets": [],
-       "schema": [
-        {
-         "metadata": "{}",
-         "name": "gold_target_code",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "gold_table_fqn",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "gold_storage_path",
-         "type": "\"string\""
-        },
-        {
-         "metadata": "{}",
-         "name": "preview_rows",
-         "type": "\"long\""
-        },
-        {
-         "metadata": "{}",
-         "name": "status",
-         "type": "\"string\""
-        }
-       ],
-       "type": "table"
-      }
-     },
-     "output_type": "display_data"
-    }
-   ],
-   "source": [
-    "if job_task_run_id:\n",
-    "    print(f\"job_task_run_id={job_task_run_id}\")\n",
-    "if job_run_id:\n",
-    "    print(f\"job_run_id={job_run_id}\")\n",
-    "\n",
-    "selected_targets = resolve_selected_targets()\n",
-    "\n",
-    "for target_code in selected_targets:\n",
-    "    ensure_gold_schema(TARGET_CONFIG[target_code][\"schema\"])\n",
-    "\n",
-    "result_rows = []\n",
-    "\n",
-    "if execution_mode == \"PLAN\":\n",
-    "    for target_code in selected_targets:\n",
-    "        target = TARGET_CONFIG[target_code]\n",
-    "        source_details = []\n",
-    "        missing_sources = []\n",
-    "        for source_name in target[\"sources\"]:\n",
-    "            if source_name.startswith(\"system.\"):\n",
-    "                source_details.append(f\"{source_name} (system table)\")\n",
-    "                continue\n",
-    "            source_fqn = silver_table_fqn(source_name)\n",
-    "            exists_flag = table_exists(source_fqn)\n",
-    "            source_details.append(f\"{source_name} -> {source_fqn} (exists={exists_flag})\")\n",
-    "            if not exists_flag:\n",
-    "                missing_sources.append(source_name)\n",
-    "        result_rows.append((\n",
-    "            target_code,\n",
-    "            gold_table_fqn(target_code),\n",
-    "            gold_table_path(target_code),\n",
-    "            target[\"description\"],\n",
-    "            \"; \".join(source_details),\n",
-    "            \"READY\" if not missing_sources else \"MISSING_SOURCES\",\n",
-    "            \", \".join(missing_sources),\n",
-    "        ))\n",
-    "\n",
-    "    plan_df = spark.createDataFrame(\n",
-    "        result_rows,\n",
-    "        [\"gold_target_code\", \"gold_table_fqn\", \"gold_storage_path\", \"description\", \"source_details\", \"status\", \"missing_sources\"],\n",
-    "    )\n",
-    "    display(plan_df.orderBy(\"gold_target_code\"))\n",
-    "\n",
-    "elif execution_mode == \"TEST\":\n",
-    "    for target_code in selected_targets:\n",
-    "        target_df = TARGET_BUILDERS[target_code]()\n",
-    "        preview_count = target_df.limit(5).count()\n",
-    "        display(target_df.limit(5))\n",
-    "        result_rows.append((target_code, gold_table_fqn(target_code), gold_table_path(target_code), preview_count, \"PREVIEWED\"))\n",
-    "\n",
-    "    summary_df = spark.createDataFrame(\n",
-    "        result_rows,\n",
-    "        [\"gold_target_code\", \"gold_table_fqn\", \"gold_storage_path\", \"preview_rows\", \"status\"],\n",
-    "    )\n",
-    "    display(summary_df.orderBy(\"gold_target_code\"))\n",
-    "\n",
-    "else:\n",
-    "    for target_code in selected_targets:\n",
-    "        target_df = TARGET_BUILDERS[target_code]()\n",
-    "        write_delta_table(target_df, target_code)\n",
-    "        if target_code == \"G4\" and apply_security:\n",
-    "            apply_book_of_business_row_filter()\n",
-    "        row_count = spark.table(gold_table_fqn(target_code)).count()\n",
-    "        result_rows.append((target_code, gold_table_fqn(target_code), gold_table_path(target_code), row_count, \"WRITTEN\"))\n",
-    "\n",
-    "    result_df = spark.createDataFrame(\n",
-    "        result_rows,\n",
-    "        [\"gold_target_code\", \"gold_table_fqn\", \"gold_storage_path\", \"row_count\", \"status\"],\n",
-    "    )\n",
-    "    display(result_df.orderBy(\"gold_target_code\"))\n"
-   ]
-  }
- ],
- "metadata": {
-  "application/vnd.databricks.v1+notebook": {
-   "computePreferences": null,
-   "dashboards": [],
-   "environmentMetadata": {
-    "base_environment": "",
-    "environment_version": "5"
-   },
-   "inputWidgetPreferences": null,
-   "language": "python",
-   "notebookMetadata": {
-    "pythonIndentUnit": 4
-   },
-   "notebookName": "gold_agg_notebook",
-   "widgets": {
-    "apply_security": {
-     "currentValue": "true",
-     "nuid": "443bb5dd-58d6-41c7-a47d-c6178eac2e55",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "true",
-      "label": null,
-      "name": "apply_security",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "true",
-      "label": null,
-      "name": "apply_security",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "catalog_name": {
-     "currentValue": "dbw_c360_canadalife",
-     "nuid": "3d74a90e-029c-481e-a8d6-fa26644ebd44",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "dbw_c360_canadalife",
-      "label": null,
-      "name": "catalog_name",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "dbw_c360_canadalife",
-      "label": null,
-      "name": "catalog_name",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "execution_mode": {
-     "currentValue": "TEST",
-     "nuid": "c6f11d15-760e-49b4-892b-b0888d9e44cd",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "PLAN",
-      "label": null,
-      "name": "execution_mode",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "PLAN",
-      "label": null,
-      "name": "execution_mode",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "gold_catalog_name": {
-     "currentValue": "dbw_c360_canadalife",
-     "nuid": "33d22b6c-f25d-4760-a39e-06e856399171",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "dbw_c360_canadalife",
-      "label": null,
-      "name": "gold_catalog_name",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "dbw_c360_canadalife",
-      "label": null,
-      "name": "gold_catalog_name",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "optimize_output": {
-     "currentValue": "false",
-     "nuid": "47923c09-0761-445c-9a59-ab846b414abe",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "false",
-      "label": null,
-      "name": "optimize_output",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "false",
-      "label": null,
-      "name": "optimize_output",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "silver_schema": {
-     "currentValue": "silver",
-     "nuid": "807471a6-7061-4d79-990b-c81e9e35eecf",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "silver",
-      "label": null,
-      "name": "silver_schema",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "silver",
-      "label": null,
-      "name": "silver_schema",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    },
-    "target_table_name": {
-     "currentValue": "G4",
-     "nuid": "3fe105d5-37c7-43bf-91a0-21e1b3064f37",
-     "typedWidgetInfo": {
-      "autoCreated": false,
-      "defaultValue": "ALL",
-      "label": null,
-      "name": "target_table_name",
-      "options": {
-       "widgetDisplayType": "Text",
-       "validationRegex": null
-      },
-      "parameterDataType": "String",
-      "dynamic": false
-     },
-     "widgetInfo": {
-      "widgetType": "text",
-      "defaultValue": "ALL",
-      "label": null,
-      "name": "target_table_name",
-      "options": {
-       "widgetType": "text",
-       "autoCreated": null,
-       "validationRegex": null
-      }
-     }
-    }
-   }
-  },
-  "language_info": {
-   "name": "python"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 0
+for widget_name in [
+    "target_table_name",
+    "execution_mode",
+    "catalog_name",
+    "silver_schema",
+    "gold_catalog_name",
+    "apply_security",
+    "optimize_output",
+]:
+    try:
+        dbutils.widgets.remove(widget_name)
+    except Exception:
+        pass
+
+DEFAULT_CATALOG_NAME = "dbw_c360_canadalife"
+DEFAULT_SILVER_SCHEMA = "silver"
+DEFAULT_GOLD_CATALOG_NAME = "dbw_c360_canadalife"
+DEFAULT_GOLD_BASE_PATH = "abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold"
+
+widget_defaults = {
+    "target_table_name": "ALL",
+    "execution_mode": "PLAN",
+    "catalog_name": DEFAULT_CATALOG_NAME,
+    "silver_schema": DEFAULT_SILVER_SCHEMA,
+    "gold_catalog_name": DEFAULT_GOLD_CATALOG_NAME,
+    "apply_security": "true",
+    "optimize_output": "false",
 }
+
+for widget_name, default_value in widget_defaults.items():
+    dbutils.widgets.text(widget_name, default_value)
+
+catalog_name = dbutils.widgets.get("catalog_name").strip() or DEFAULT_CATALOG_NAME
+silver_schema = dbutils.widgets.get("silver_schema").strip() or DEFAULT_SILVER_SCHEMA
+gold_catalog_name = dbutils.widgets.get("gold_catalog_name").strip() or DEFAULT_GOLD_CATALOG_NAME
+target_table_name = dbutils.widgets.get("target_table_name").strip() or "ALL"
+execution_mode = (dbutils.widgets.get("execution_mode").strip() or "PLAN").upper()
+apply_security = dbutils.widgets.get("apply_security").strip().lower() == "true"
+optimize_output = dbutils.widgets.get("optimize_output").strip().lower() == "true"
+gold_base_path = DEFAULT_GOLD_BASE_PATH.rstrip("/")
+run_id = str(uuid.uuid4())
+
+job_context_json = dbutils.notebook.entry_point.getDbutils().notebook().getContext().safeToJson()
+job_context = json.loads(job_context_json)
+job_run_id = (
+    job_context.get("tags", {}).get("jobRunId")
+    or job_context.get("tags", {}).get("multitaskParentRunId")
+    or job_context.get("currentRunId", {}).get("id")
+    or job_context.get("rootRunId", {}).get("id")
+)
+job_task_run_id = job_context.get("currentRunId", {}).get("id") or job_run_id
+
+if execution_mode not in {"PLAN", "TEST", "RUN"}:
+    raise ValueError("execution_mode must be one of PLAN, TEST, or RUN")
+
+silver_catalog = catalog_name
+silver_table_base = f"{silver_catalog}.{silver_schema}"
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Configuration summary
+# MAGIC %md
+# MAGIC This section defines the gold targets, their silver dependencies, and operational expectations.
+# MAGIC
+# MAGIC Design choices:
+# MAGIC * Gold targets are grouped by consumer use case, but all outputs are written into the single `gold` schema.
+# MAGIC * Gold storage uses business-friendly ADLS paths under `abfss://gold@adlsc360canadalife.dfs.core.windows.net/gold/<table_name>/`.
+# MAGIC * Current-state tables filter silver `is_current = true` where required.
+# MAGIC * G3 deliberately reads full SCD2 history from `policy.individual_life_clean` for churn and lapse features.
+# MAGIC * G4 prepares for Unity Catalog row filtering in `RUN` mode.
+# MAGIC * G6 is intentionally separated into the dedicated Compliance Audit Notebook.
+# MAGIC
+
+# COMMAND ----------
+
+# DBTITLE 1,Configuration and target metadata
+TARGET_CONFIG = {
+    "G1": {
+        "table_name": "customer_360",
+        "schema": "gold",
+        "description": "Wide current-state customer fact",
+        "sources": [
+            "customer.master",
+            "policy.individual_life_enriched",
+            "policy.disability_ci_clean",
+            "group_benefits.certificate_coverage_detail",
+            "group_retirement.member_clean",
+            "investments.climl_clean",
+            "interactions.callcentre_clean",
+        ],
+        "write_mode": "overwrite",
+    },
+    "G2": {
+        "table_name": "regulatory_view",
+        "schema": "gold",
+        "description": "OSFI and IFRS-oriented aggregate compliance fact",
+        "sources": [
+            "policy.individual_life_enriched",
+            "reinsurance.treaty_clean",
+        ],
+        "write_mode": "overwrite",
+    },
+    "G3": {
+        "table_name": "ml_features",
+        "schema": "gold",
+        "description": "Feature store style dataset with full SCD2 lifecycle features",
+        "sources": [
+            "policy.individual_life_clean",
+            "policy.individual_life_enriched",
+            "policy.disability_ci_clean",
+            "digital.portal_clean",
+            "group_retirement.member_clean",
+            "freedom55.advisor_feed_clean",
+            "customer.master",
+        ],
+        "write_mode": "overwrite",
+    },
+    "G4": {
+        "table_name": "book_of_business",
+        "schema": "gold",
+        "description": "Advisor-scoped book of business with Unity Catalog row filter",
+        "sources": [
+            "customer.master",
+            "freedom55.advisor_feed_clean",
+            "policy.individual_life_enriched",
+            "policy.disability_ci_clean",
+        ],
+        "write_mode": "overwrite",
+    },
+    "G5": {
+        "table_name": "kpi_summary",
+        "schema": "gold",
+        "description": "Daily executive KPI snapshot",
+        "sources": [
+            "customer.master",
+            "policy.individual_life_clean",
+            "policy.individual_life_enriched",
+            "policy.disability_ci_clean",
+            "digital.portal_clean",
+            "group_benefits.certificate_coverage_detail",
+            "group_retirement.member_clean",
+            "investments.climl_clean",
+            "interactions.callcentre_clean",
+        ],
+        "write_mode": "overwrite",
+    },
+}
+
+TARGET_ORDER = ["G1", "G2", "G3", "G4", "G5"]
+
+LINEAGE_MAP_ROWS = [
+    ("customer.master", "G1", "gold.customer_360"),
+    ("policy.individual_life_enriched", "G1", "gold.customer_360"),
+    ("policy.disability_ci_clean", "G1", "gold.customer_360"),
+    ("group_benefits.certificate_coverage_detail", "G1", "gold.customer_360"),
+    ("group_retirement.member_clean", "G1", "gold.customer_360"),
+    ("investments.climl_clean", "G1", "gold.customer_360"),
+    ("interactions.callcentre_clean", "G1", "gold.customer_360"),
+    ("policy.individual_life_enriched", "G2", "gold.regulatory_view"),
+    ("reinsurance.treaty_clean", "G2", "gold.regulatory_view"),
+    ("policy.individual_life_clean", "G3", "gold.ml_features"),
+    ("digital.portal_clean", "G3", "gold.ml_features"),
+    ("group_retirement.member_clean", "G3", "gold.ml_features"),
+    ("freedom55.advisor_feed_clean", "G3", "gold.ml_features"),
+    ("customer.master", "G3", "gold.ml_features"),
+    ("customer.master", "G4", "gold.book_of_business"),
+    ("freedom55.advisor_feed_clean", "G4", "gold.book_of_business"),
+    ("policy.individual_life_enriched", "G4", "gold.book_of_business"),
+    ("policy.disability_ci_clean", "G4", "gold.book_of_business"),
+    ("customer.master", "G5", "gold.kpi_summary"),
+    ("policy.individual_life_clean", "G5", "gold.kpi_summary"),
+    ("policy.individual_life_enriched", "G5", "gold.kpi_summary"),
+    ("policy.disability_ci_clean", "G5", "gold.kpi_summary"),
+    ("digital.portal_clean", "G5", "gold.kpi_summary"),
+    ("group_benefits.certificate_coverage_detail", "G5", "gold.kpi_summary"),
+    ("group_retirement.member_clean", "G5", "gold.kpi_summary"),
+    ("investments.climl_clean", "G5", "gold.kpi_summary"),
+    ("interactions.callcentre_clean", "G5", "gold.kpi_summary"),
+]
+
+LINEAGE_MAP_DF = spark.createDataFrame(
+    LINEAGE_MAP_ROWS,
+    ["silver_source", "gold_target_code", "gold_target_name"],
+)
+
+DATAFRAME_CACHE = {}
+
+
+def logical_to_physical(name: str) -> str:
+    return name.replace(".", "_").lower()
+
+
+def silver_table_fqn(logical_name: str) -> str:
+    return f"{silver_catalog}.{silver_schema}.{logical_to_physical(logical_name)}"
+
+
+def gold_table_fqn(target_code: str) -> str:
+    target = TARGET_CONFIG[target_code]
+    return f"{gold_catalog_name}.{target['schema']}.{target['table_name']}"
+
+
+def gold_table_path(target_code: str) -> str:
+    target = TARGET_CONFIG[target_code]
+    return f"{gold_base_path}/{target['table_name']}"
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Shared helpers
+# MAGIC %md
+# MAGIC The helper layer handles:
+# MAGIC * source loading and availability checks
+# MAGIC * reusable customer-, policy-, and advisor-level aggregates
+# MAGIC * Delta writes and optional optimization
+# MAGIC * security object creation for G4
+# MAGIC * reusable orchestration for G1-G5 outputs
+# MAGIC
+
+# COMMAND ----------
+
+# DBTITLE 1,Utility functions
+def resolve_selected_targets():
+    selected = target_table_name.upper()
+    if selected == "ALL":
+        return TARGET_ORDER
+    if selected in TARGET_CONFIG:
+        return [selected]
+    raise ValueError(f"Unsupported target_table_name: {target_table_name}. Use ALL or one of {TARGET_ORDER}")
+
+
+def table_exists(table_name: str) -> bool:
+    try:
+        return spark.catalog.tableExists(table_name)
+    except Exception:
+        return False
+
+
+def ensure_gold_schema(schema_name: str):
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {gold_catalog_name}.{schema_name}")
+
+
+def read_silver_table(logical_name: str) -> DataFrame:
+    table_name = silver_table_fqn(logical_name)
+    return spark.table(table_name)
+
+
+def first_existing_column(df_or_columns, candidates: list, dtype: str = "string"):
+    column_names = df_or_columns if isinstance(df_or_columns, set) else set(df_or_columns.columns)
+    for candidate in candidates:
+        if candidate in column_names:
+            return F.col(candidate).cast(dtype)
+    return F.lit(None).cast(dtype)
+
+
+def current_record_filter(df: DataFrame) -> DataFrame:
+    return df.filter(F.coalesce(F.col("is_current"), F.lit(True)) == True) if "is_current" in df.columns else df
+
+
+def union_all(dfs):
+    valid_dfs = [df for df in dfs if df is not None]
+    if not valid_dfs:
+        raise ValueError("union_all received no dataframes")
+    return reduce(lambda left, right: left.unionByName(right, allowMissingColumns=True), valid_dfs)
+
+
+def write_delta_table(df: DataFrame, target_code: str):
+    target_fqn = gold_table_fqn(target_code)
+    target_path = gold_table_path(target_code)
+    temp_view_name = f"tmp_{logical_to_physical(target_fqn)}_{uuid.uuid4().hex}"
+    df.createOrReplaceTempView(temp_view_name)
+    try:
+        if table_exists(target_fqn):
+            spark.sql(f"DROP TABLE {target_fqn}")
+        spark.sql(
+            f"""
+            CREATE TABLE {target_fqn}
+            USING DELTA
+            LOCATION '{target_path}'
+            AS SELECT * FROM {temp_view_name}
+            """
+        )
+    finally:
+        try:
+            spark.catalog.dropTempView(temp_view_name)
+        except Exception:
+            pass
+    if optimize_output:
+        spark.sql(f"OPTIMIZE {target_fqn}")
+
+
+def get_cached_df(name: str, builder):
+    if name not in DATAFRAME_CACHE:
+        DATAFRAME_CACHE[name] = builder()
+    return DATAFRAME_CACHE[name]
+
+
+def build_life_agg() -> DataFrame:
+    def _builder():
+        life_df = current_record_filter(read_silver_table("policy.individual_life_enriched"))
+        customer_key = first_existing_column(life_df, ["life_insured_id", "customer_id"], "string").alias("c360_customer_id")
+        return life_df.groupBy(customer_key).agg(
+            F.countDistinct("policy_number").alias("policy_count"),
+            F.sum(F.coalesce(F.col("annualised_premium"), F.lit(0.0))).alias("total_annualised_life_premium"),
+            F.sum(F.coalesce(F.col("face_amount"), F.lit(0.0))).alias("total_life_coverage_amount"),
+            F.max(F.when(F.col("term_expiring_90d_flag") == True, F.lit(1)).otherwise(F.lit(0))).alias("term_expiring_90d_flag"),
+            F.max(F.col("churn_risk_signal")).alias("churn_risk_signal"),
+            F.min("issue_date").alias("first_policy_issue_date"),
+        )
+    return get_cached_df("life_agg", _builder)
+
+
+def build_dis_ci_agg() -> DataFrame:
+    def _builder():
+        dis_df = current_record_filter(read_silver_table("policy.disability_ci_clean"))
+        customer_key = first_existing_column(dis_df, ["life_insured_id", "customer_id"], "string").alias("c360_customer_id")
+        claim_status_expr = F.upper(F.coalesce(first_existing_column(dis_df, ["claim_status", "policy_status_code"], "string"), F.lit("")))
+        claim_date_expr = first_existing_column(dis_df, ["claim_date", "issue_date"], "date")
+        return dis_df.groupBy(customer_key).agg(
+            F.max(F.when(F.upper(F.coalesce(F.col("product_type_code"), F.lit(""))).rlike("DISABILITY|DI"), F.lit(1)).otherwise(F.lit(0))).alias("has_disability_coverage"),
+            F.max(F.when(F.upper(F.coalesce(F.col("product_type_code"), F.lit(""))).rlike("CRITICAL|CI"), F.lit(1)).otherwise(F.lit(0))).alias("has_ci_coverage"),
+            F.max(F.when(claim_status_expr.rlike("ACTIVE|OPEN|PENDING"), F.lit(1)).otherwise(F.lit(0))).alias("has_active_claim_flag"),
+            F.count(F.when(claim_date_expr >= F.date_sub(F.current_date(), 90), 1)).alias("claim_frequency_3m"),
+        )
+    return get_cached_df("dis_ci_agg", _builder)
+
+
+def build_group_benefits_agg() -> DataFrame:
+    def _builder():
+        benefits_df = read_silver_table("group_benefits.certificate_coverage_detail")
+        if "status" in benefits_df.columns:
+            benefits_df = benefits_df.filter(F.upper(F.col("status")) == "ACTIVE")
+        member_key = first_existing_column(benefits_df, ["plan_member_id", "member_id"], "string").alias("c360_customer_id")
+        plan_sponsor_expr = first_existing_column(benefits_df, ["plan_sponsor_name", "employer_name"], "string")
+        coverage_expr = first_existing_column(benefits_df, ["coverage_type_code", "coverage_type", "coverage_type_codes_enrolled"], "string")
+        return benefits_df.groupBy(member_key).agg(
+            F.max(F.lit(1)).alias("has_group_benefits"),
+            F.max(plan_sponsor_expr).alias("group_plan_sponsor_name"),
+            F.collect_set(coverage_expr).alias("group_coverages_enrolled"),
+        )
+    return get_cached_df("group_benefits_agg", _builder)
+
+
+def build_group_retirement_agg() -> DataFrame:
+    def _builder():
+        gr_df = current_record_filter(read_silver_table("group_retirement.member_clean"))
+        member_key = first_existing_column(gr_df, ["customer_id", "member_id"], "string").alias("c360_customer_id")
+        balance_expr = F.coalesce(
+            first_existing_column(gr_df, ["account_balance_current", "account_balance", "transaction_amount"], "double"),
+            F.lit(0.0),
+        )
+        contribution_expr = F.coalesce(
+            first_existing_column(gr_df, ["contribution_ytd", "employee_contribution_ytd", "transaction_amount"], "double"),
+            F.lit(0.0),
+        )
+        return gr_df.groupBy(member_key).agg(
+            F.max(F.lit(1)).alias("has_group_retirement"),
+            F.sum(balance_expr).alias("group_retirement_total_balance"),
+            F.sum(contribution_expr).alias("group_retirement_contribution_ytd"),
+        )
+    return get_cached_df("group_retirement_agg", _builder)
+
+
+def build_investments_agg() -> DataFrame:
+    def _builder():
+        inv_df = current_record_filter(read_silver_table("investments.climl_clean"))
+        annuitant_key = first_existing_column(inv_df, ["annuitant_id", "customer_id"], "string").alias("c360_customer_id")
+        return inv_df.groupBy(annuitant_key).agg(
+            F.max(F.lit(1)).alias("has_segregated_fund"),
+            F.sum(F.coalesce(first_existing_column(inv_df, ["market_value", "total_invested_assets"], "double"), F.lit(0.0))).alias("total_invested_assets"),
+            F.sum(F.coalesce(first_existing_column(inv_df, ["maturity_guarantee_amount", "maturity_guarantee"], "double"), F.lit(0.0))).alias("total_maturity_guarantee"),
+        )
+    return get_cached_df("investments_agg", _builder)
+
+
+def build_interactions_agg() -> DataFrame:
+    def _builder():
+        interactions_df = read_silver_table("interactions.callcentre_clean")
+        customer_key = first_existing_column(interactions_df, ["c360_customer_id", "customer_id", "advisor_id"], "string").alias("c360_customer_id")
+        interaction_date_expr = F.coalesce(
+            first_existing_column(interactions_df, ["interaction_timestamp", "interaction_date"], "date"),
+            F.to_date("_ingested_at"),
+        )
+        return interactions_df.groupBy(customer_key).agg(
+            F.max(interaction_date_expr).alias("last_interaction_date")
+        ).withColumn(
+            "days_since_last_interaction",
+            F.datediff(F.current_date(), F.col("last_interaction_date"))
+        )
+    return get_cached_df("interactions_agg", _builder)
+
+
+def create_or_replace_row_filter_function():
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {gold_catalog_name}.security")
+    spark.sql(
+        f"""
+        CREATE OR REPLACE FUNCTION {gold_catalog_name}.security.advisor_row_filter(advisor_id_col STRING)
+        RETURN is_account_group_member(concat('canada_life_advisor_', advisor_id_col))
+        """
+    )
+
+
+def apply_book_of_business_row_filter():
+    create_or_replace_row_filter_function()
+    spark.sql(
+        f"ALTER TABLE {gold_table_fqn('G4')} SET ROW FILTER {gold_catalog_name}.security.advisor_row_filter ON (advisor_id)"
+    )
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Gold builders overview
+# MAGIC %md
+# MAGIC Each builder below corresponds to one gold target:
+# MAGIC * G1 current-state customer 360 fact
+# MAGIC * G2 regulatory aggregate fact with gross/net exposure logic
+# MAGIC * G3 ML feature dataset with SCD2 lifecycle features
+# MAGIC * G4 advisor fact with row-level security
+# MAGIC * G5 daily KPI aggregate fact
+# MAGIC
+
+# COMMAND ----------
+
+# DBTITLE 1,Gold target builders
+def build_g1_customer_360() -> DataFrame:
+    customer_source_df = current_record_filter(read_silver_table("customer.master"))
+    customer_columns = set(customer_source_df.columns)
+    customer_df = customer_source_df.select(
+        F.col("customer_id").alias("c360_customer_id"),
+        F.concat_ws(" ", F.col("first_name"), F.col("last_name")).alias("full_name_clean"),
+        first_existing_column(customer_columns, ["date_of_birth", "dob"], "date").alias("date_of_birth"),
+        first_existing_column(customer_columns, ["province_clean", "province"], "string").alias("province_clean"),
+        first_existing_column(customer_columns, ["advisor_id_primary", "advisor_id"], "string").alias("advisor_id_primary"),
+        first_existing_column(customer_columns, ["match_confidence"], "string").alias("match_confidence"),
+    ).withColumn(
+        "match_confidence",
+        F.coalesce(F.col("match_confidence"), F.lit("MEDIUM")),
+    )
+
+    g1_df = (
+        customer_df
+        .join(build_life_agg(), ["c360_customer_id"], "left")
+        .join(build_dis_ci_agg(), ["c360_customer_id"], "left")
+        .join(build_group_benefits_agg(), ["c360_customer_id"], "left")
+        .join(build_group_retirement_agg(), ["c360_customer_id"], "left")
+        .join(build_investments_agg(), ["c360_customer_id"], "left")
+        .join(build_interactions_agg(), ["c360_customer_id"], "left")
+        .withColumn(
+            "cross_sell_propensity_ci",
+            F.when(
+                (F.coalesce(F.col("has_ci_coverage"), F.lit(0)) == 0)
+                & ((F.datediff(F.current_date(), F.col("date_of_birth")) / F.lit(365.0)).between(40, 60)),
+                F.lit(1),
+            ).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "cross_sell_term_conversion_flag",
+            F.coalesce(F.col("term_expiring_90d_flag"), F.lit(0)),
+        )
+        .withColumn(
+            "total_annual_premium_all_products",
+            F.coalesce(F.col("total_annualised_life_premium"), F.lit(0.0))
+            + F.coalesce(F.col("group_retirement_contribution_ytd"), F.lit(0.0)),
+        )
+        .withColumn("gold_target_code", F.lit("G1"))
+        .withColumn("gold_run_id", F.lit(run_id))
+        .withColumn("gold_refreshed_at", F.current_timestamp())
+    )
+    return g1_df
+
+
+def build_g2_regulatory_view() -> DataFrame:
+    life_df = current_record_filter(read_silver_table("policy.individual_life_enriched"))
+    treaty_df = current_record_filter(read_silver_table("reinsurance.treaty_clean"))
+
+    gross_df = life_df.groupBy(
+        F.lit("INDIVIDUAL_LIFE").alias("product_line"),
+        F.col("product_type_code_canonical").alias("product_type_code"),
+        F.col("province_clean").alias("province"),
+        F.col("policy_status_canonical").alias("policy_status"),
+    ).agg(
+        F.count("policy_number").alias("policy_count"),
+        F.sum(F.coalesce(F.col("face_amount"), F.lit(0.0))).alias("gross_face_amount"),
+        F.sum(F.coalesce(F.col("annualised_premium"), F.lit(0.0))).alias("gross_annualised_premium"),
+        F.sum(
+            F.when(F.col("issue_date") >= F.lit("2023-01-01"), F.coalesce(F.col("annualised_premium"), F.lit(0.0))).otherwise(F.lit(0.0))
+        ).alias("ifrs17_premium"),
+    )
+
+    treaty_to_policy_df = life_df.select(
+        F.col("policy_number").alias("life_policy_number"),
+        F.col("product_type_code_canonical"),
+        F.col("province_clean"),
+        F.col("policy_status_canonical"),
+    ).dropDuplicates(["life_policy_number"])
+
+    ceded_df = treaty_df.alias("t").join(
+        treaty_to_policy_df.alias("l"),
+        F.col("t.policy_number") == F.col("l.life_policy_number"),
+        "left",
+    ).groupBy(
+        F.lit("INDIVIDUAL_LIFE").alias("product_line"),
+        F.coalesce(F.col("l.product_type_code_canonical"), F.col("t.product_type_code"), F.lit("UNKNOWN")).alias("product_type_code"),
+        F.col("l.province_clean").alias("province"),
+        F.coalesce(F.col("l.policy_status_canonical"), F.col("t.policy_status_code"), F.lit("UNKNOWN")).alias("policy_status"),
+    ).agg(
+        F.sum(F.coalesce(F.col("t.ceded_amount"), F.lit(0.0))).alias("ceded_face_amount")
+    )
+
+    return gross_df.join(ceded_df, ["product_line", "product_type_code", "province", "policy_status"], "left").withColumn(
+        "ceded_face_amount", F.coalesce(F.col("ceded_face_amount"), F.lit(0.0))
+    ).withColumn(
+        "net_face_amount", F.col("gross_face_amount") - F.col("ceded_face_amount")
+    ).withColumn(
+        "gold_target_code", F.lit("G2")
+    ).withColumn(
+        "gold_run_id", F.lit(run_id)
+    ).withColumn(
+        "gold_refreshed_at", F.current_timestamp()
+    )
+
+
+def build_g3_ml_features() -> DataFrame:
+    customer_source_df = current_record_filter(read_silver_table("customer.master"))
+    customer_columns = set(customer_source_df.columns)
+    customer_df = customer_source_df.select(
+        F.col("customer_id").alias("c360_customer_id"),
+        first_existing_column(customer_columns, ["match_confidence"], "string").alias("match_confidence"),
+        first_existing_column(customer_columns, ["advisor_id_primary", "advisor_id"], "string").alias("advisor_id"),
+    ).withColumn(
+        "match_confidence",
+        F.coalesce(F.col("match_confidence"), F.lit("MEDIUM")),
+    )
+    life_current_df = current_record_filter(read_silver_table("policy.individual_life_enriched"))
+    life_history_df = read_silver_table("policy.individual_life_clean")
+    digital_df = read_silver_table("digital.portal_clean")
+    retirement_df = current_record_filter(read_silver_table("group_retirement.member_clean"))
+    advisor_df = current_record_filter(read_silver_table("freedom55.advisor_feed_clean"))
+
+    policy_features_df = life_current_df.groupBy(first_existing_column(life_current_df, ["life_insured_id", "customer_id"], "string").alias("c360_customer_id")).agg(
+        F.datediff(F.current_date(), F.min("issue_date")).alias("policy_tenure_days"),
+        F.sum(
+            F.when(F.col("policy_status_canonical") == "INFORCE", F.coalesce(F.col("annualised_premium"), F.lit(0.0))).otherwise(F.lit(0.0))
+        ).alias("total_premium_12m"),
+    )
+
+    history_features_df = life_history_df.groupBy(first_existing_column(life_history_df, ["life_insured_id", "customer_id"], "string").alias("c360_customer_id")).agg(
+        F.sum(F.when(F.upper(F.coalesce(F.col("policy_status_code"), F.lit(""))) == "LAPSED", F.lit(1)).otherwise(F.lit(0))).alias("lapse_count_lifetime"),
+        F.sum(F.when(F.upper(F.coalesce(F.col("policy_status_code"), F.lit(""))) == "REINSTATED", F.lit(1)).otherwise(F.lit(0))).alias("reinstatement_count"),
+    )
+
+    login_points_expr = F.sum(
+        F.coalesce(
+            first_existing_column(digital_df, ["logins_90d"], "double"),
+            F.when(F.to_date(F.col("event_timestamp")) >= F.date_sub(F.current_date(), 90), F.lit(1.0)).otherwise(F.lit(0.0)),
+        )
+    ) * F.lit(2.0)
+
+    download_points_expr = F.sum(
+        F.coalesce(
+            first_existing_column(digital_df, ["doc_downloads_90d"], "double"),
+            F.when(
+                F.upper(F.coalesce(F.col("event_type"), F.lit(""))).like("%DOWNLOAD%"),
+                F.lit(1.0),
+            ).otherwise(F.lit(0.0)),
+        )
+    )
+
+    digital_features_df = (
+        digital_df.groupBy(first_existing_column(digital_df, ["c360_customer_id", "customer_id"], "string").alias("c360_customer_id"))
+        .agg((login_points_expr + download_points_expr).alias("engagement_points"))
+        .withColumn("digital_engagement_score", F.col("engagement_points") / F.lit(90.0))
+        .drop("engagement_points")
+    )
+
+    retirement_features_df = retirement_df.groupBy(first_existing_column(retirement_df, ["customer_id", "member_id"], "string").alias("c360_customer_id")).agg(
+        F.sum(F.coalesce(first_existing_column(retirement_df, ["account_balance_current", "account_balance", "transaction_amount"], "double"), F.lit(0.0))).alias("group_retirement_balance")
+    )
+
+    advisor_features_df = advisor_df.groupBy(F.col("advisor_id")).agg(
+        F.datediff(
+            F.current_date(),
+            F.min(first_existing_column(advisor_df, ["advisor_start_date", "assignment_start_date", "valuation_date"], "date")),
+        ).alias("advisor_tenure_days")
+    )
+
+    claim_features_df = build_dis_ci_agg().select("c360_customer_id", "claim_frequency_3m")
+
+    return (
+        customer_df
+        .join(policy_features_df, ["c360_customer_id"], "left")
+        .join(history_features_df, ["c360_customer_id"], "left")
+        .join(claim_features_df, ["c360_customer_id"], "left")
+        .join(digital_features_df, ["c360_customer_id"], "left")
+        .join(retirement_features_df, ["c360_customer_id"], "left")
+        .join(advisor_features_df, ["advisor_id"], "left")
+        .withColumn("gold_target_code", F.lit("G3"))
+        .withColumn("gold_run_id", F.lit(run_id))
+        .withColumn("gold_refreshed_at", F.current_timestamp())
+    )
+
+
+def build_g4_book_of_business() -> DataFrame:
+    customer_source_df = current_record_filter(read_silver_table("customer.master"))
+    customer_columns = set(customer_source_df.columns)
+    customer_df = customer_source_df.select(
+        F.coalesce(
+            first_existing_column(customer_columns, ["advisor_id_primary"], "string"),
+            first_existing_column(customer_columns, ["advisor_id"], "string"),
+        ).alias("advisor_id"),
+        F.col("customer_id").alias("c360_customer_id"),
+        F.concat_ws(" ", F.col("first_name"), F.col("last_name")).alias("full_name_clean"),
+        first_existing_column(customer_columns, ["province_clean", "province"], "string").alias("province_clean"),
+        first_existing_column(customer_columns, ["date_of_birth", "dob"], "date").alias("date_of_birth"),
+    ).filter(F.col("advisor_id").isNotNull())
+    advisor_source_df = current_record_filter(read_silver_table("freedom55.advisor_feed_clean"))
+    advisor_columns = set(advisor_source_df.columns)
+    advisor_df = advisor_source_df.select(
+        "advisor_id",
+        F.coalesce(
+            first_existing_column(advisor_columns, ["advisor_name"], "string"),
+            F.concat_ws(" ", first_existing_column(advisor_columns, ["advisor_first_name"], "string"), first_existing_column(advisor_columns, ["advisor_last_name"], "string")),
+        ).alias("advisor_name"),
+        F.coalesce(first_existing_column(advisor_columns, ["advisor_branch", "branch_name", "scenario_name"], "string"), F.lit("UNKNOWN")).alias("advisor_branch"),
+    ).dropDuplicates(["advisor_id"])
+
+    life_df = build_life_agg()
+    dis_df = build_dis_ci_agg()
+
+    return (
+        customer_df
+        .join(advisor_df, ["advisor_id"], "left")
+        .join(life_df, ["c360_customer_id"], "left")
+        .join(dis_df, ["c360_customer_id"], "left")
+        .withColumn("advisor_name", F.coalesce(F.col("advisor_name"), F.col("advisor_id")))
+        .withColumn("advisor_branch", F.coalesce(F.col("advisor_branch"), F.lit("UNKNOWN")))
+        .withColumn(
+            "disability_gap_flag",
+            F.when(F.coalesce(F.col("has_disability_coverage"), F.lit(0)) == 0, F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "ci_cross_sell_flag",
+            F.when(
+                (F.coalesce(F.col("has_ci_coverage"), F.lit(0)) == 0)
+                & ((F.datediff(F.current_date(), F.col("date_of_birth")) / F.lit(365.0)).between(40, 60)),
+                F.lit(1),
+            ).otherwise(F.lit(0)),
+        )
+        .withColumn("gold_target_code", F.lit("G4"))
+        .withColumn("gold_run_id", F.lit(run_id))
+        .withColumn("gold_refreshed_at", F.current_timestamp())
+    )
+
+
+def build_g5_kpi_summary() -> DataFrame:
+    customer_df = current_record_filter(read_silver_table("customer.master")).select(F.col("customer_id").alias("c360_customer_id"))
+    life_clean_df = read_silver_table("policy.individual_life_clean")
+    life_enriched_df = current_record_filter(read_silver_table("policy.individual_life_enriched"))
+    digital_df = read_silver_table("digital.portal_clean")
+
+    first_policy_df = life_enriched_df.groupBy(first_existing_column(life_enriched_df, ["life_insured_id", "customer_id"], "string").alias("c360_customer_id")).agg(
+        F.min("issue_date").alias("first_policy_date")
+    )
+
+    base_df = customer_df.join(first_policy_df, ["c360_customer_id"], "left")
+
+    metrics_df = base_df.agg(
+        F.current_date().alias("kpi_date"),
+        F.countDistinct(F.when(F.col("first_policy_date") >= F.date_sub(F.current_date(), 7), F.col("c360_customer_id"))).alias("new_customers_7d"),
+    )
+
+    active_policy_count_df = life_enriched_df.agg(
+        F.countDistinct(F.when(F.col("policy_status_canonical") == "INFORCE", F.col("policy_number"))).alias("active_individual_life_policies"),
+        F.sum(
+            F.when(
+                (F.col("policy_status_canonical") == "INFORCE")
+                & (F.date_trunc("month", F.col("issue_date")) == F.date_trunc("month", F.current_date())),
+                F.coalesce(F.col("annualised_premium"), F.lit(0.0)),
+            ).otherwise(F.lit(0.0))
+        ).alias("gwp_mtd_individual_life"),
+    )
+
+    churn_df = life_clean_df.agg(
+        (
+            F.countDistinct(
+                F.when(
+                    (F.upper(F.coalesce(F.col("policy_status_code"), F.lit(""))) == "LAPSED")
+                    & (F.col("effective_date") >= F.date_sub(F.current_date(), 30)),
+                    F.col("policy_number"),
+                )
+            )
+            / F.nullif(
+                F.countDistinct(
+                    F.when(
+                        (F.col("effective_date") <= F.date_sub(F.current_date(), 30))
+                        & ((F.col("expiry_date") > F.date_sub(F.current_date(), 30)) | F.col("expiry_date").isNull()),
+                        F.col("policy_number"),
+                    )
+                ),
+                F.lit(0),
+            )
+        ).alias("churn_rate_30d")
+    )
+
+    total_customers = customer_df.agg(F.countDistinct("c360_customer_id").alias("total_customers")).collect()[0][0]
+    digital_customer_expr = first_existing_column(digital_df, ["c360_customer_id", "customer_id"], "string")
+    digital_activity_date_expr = F.coalesce(first_existing_column(digital_df, ["last_portal_login"], "date"), F.to_date("event_timestamp"))
+    digital_adoption_df = digital_df.agg(
+        (
+            F.countDistinct(
+                F.when(
+                    digital_activity_date_expr >= F.date_sub(F.current_date(), 90),
+                    digital_customer_expr,
+                )
+            )
+            / F.nullif(F.lit(total_customers), F.lit(0))
+        ).alias("digital_adoption_rate_90d")
+    )
+
+    result_df = metrics_df.crossJoin(active_policy_count_df).crossJoin(churn_df).crossJoin(digital_adoption_df)
+    return result_df.withColumn("gold_target_code", F.lit("G5")).withColumn("gold_run_id", F.lit(run_id)).withColumn("gold_refreshed_at", F.current_timestamp())
+
+
+TARGET_BUILDERS = {
+    "G1": build_g1_customer_360,
+    "G2": build_g2_regulatory_view,
+    "G3": build_g3_ml_features,
+    "G4": build_g4_book_of_business,
+    "G5": build_g5_kpi_summary,
+}
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Execution and orchestration
+if job_task_run_id:
+    print(f"job_task_run_id={job_task_run_id}")
+if job_run_id:
+    print(f"job_run_id={job_run_id}")
+
+selected_targets = resolve_selected_targets()
+
+for target_code in selected_targets:
+    ensure_gold_schema(TARGET_CONFIG[target_code]["schema"])
+
+result_rows = []
+
+if execution_mode == "PLAN":
+    for target_code in selected_targets:
+        target = TARGET_CONFIG[target_code]
+        source_details = []
+        missing_sources = []
+        for source_name in target["sources"]:
+            if source_name.startswith("system."):
+                source_details.append(f"{source_name} (system table)")
+                continue
+            source_fqn = silver_table_fqn(source_name)
+            exists_flag = table_exists(source_fqn)
+            source_details.append(f"{source_name} -> {source_fqn} (exists={exists_flag})")
+            if not exists_flag:
+                missing_sources.append(source_name)
+        result_rows.append((
+            target_code,
+            gold_table_fqn(target_code),
+            gold_table_path(target_code),
+            target["description"],
+            "; ".join(source_details),
+            "READY" if not missing_sources else "MISSING_SOURCES",
+            ", ".join(missing_sources),
+        ))
+
+    plan_df = spark.createDataFrame(
+        result_rows,
+        ["gold_target_code", "gold_table_fqn", "gold_storage_path", "description", "source_details", "status", "missing_sources"],
+    )
+    display(plan_df.orderBy("gold_target_code"))
+
+elif execution_mode == "TEST":
+    for target_code in selected_targets:
+        target_df = TARGET_BUILDERS[target_code]()
+        preview_count = target_df.limit(5).count()
+        display(target_df.limit(5))
+        result_rows.append((target_code, gold_table_fqn(target_code), gold_table_path(target_code), preview_count, "PREVIEWED"))
+
+    summary_df = spark.createDataFrame(
+        result_rows,
+        ["gold_target_code", "gold_table_fqn", "gold_storage_path", "preview_rows", "status"],
+    )
+    display(summary_df.orderBy("gold_target_code"))
+
+else:
+    for target_code in selected_targets:
+        target_df = TARGET_BUILDERS[target_code]()
+        write_delta_table(target_df, target_code)
+        if target_code == "G4" and apply_security:
+            apply_book_of_business_row_filter()
+        row_count = spark.table(gold_table_fqn(target_code)).count()
+        result_rows.append((target_code, gold_table_fqn(target_code), gold_table_path(target_code), row_count, "WRITTEN"))
+
+    result_df = spark.createDataFrame(
+        result_rows,
+        ["gold_target_code", "gold_table_fqn", "gold_storage_path", "row_count", "status"],
+    )
+    display(result_df.orderBy("gold_target_code"))
