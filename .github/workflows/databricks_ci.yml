@@ -1,16 +1,27 @@
 name: Databricks CI/CD
 
+# Branching strategy:
+#   feature/databricks-* → develop → main
+#
+#   1. Push to feature/databricks-*  → Validate only (CI gate)
+#   2. PR to develop                 → Validate only (CI gate)
+#   3. Push to develop               → Validate + Deploy to Development
+#   4. Push to main                  → Validate + Deploy to Production (manual approval)
+
 on:
   push:
     branches:
-      - "feature/databricks-*"
+      - "feature/databricks-*"   # Validate on feature branch pushes
+      - "develop"                 # Deploy to DEV when merged into develop
+      - "main"                    # Deploy to PROD when merged into main
     paths:
       - "databricks.yml"
       - "resources/**"
       - ".github/workflows/databricks_ci.yml"
   pull_request:
     branches:
-      - main
+      - develop   # PR from feature → develop
+      - main      # PR from develop → main
     paths:
       - "databricks.yml"
       - "resources/**"
@@ -21,7 +32,7 @@ env:
   DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
 jobs:
-  # Stage 1: Validate Bundle
+  # Stage 1: Validate Bundle — runs on all triggers
   # ─────────────────────────────────────────────────────────────────────────
   validate:
     name: Validate DAB Bundle
@@ -36,12 +47,13 @@ jobs:
       - name: Validate bundle
         run: databricks bundle validate
 
-  # Stage 2: Deploy to Development
+  # Stage 2: Deploy to Development — only on push to develop
   # ─────────────────────────────────────────────────────────────────────────
   deploy-dev:
     name: Deploy to Development
     runs-on: ubuntu-latest
     needs: validate
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment: databricks-development
     steps:
       - uses: actions/checkout@v4
@@ -53,12 +65,12 @@ jobs:
       - name: Deploy bundle to development
         run: databricks bundle deploy --target development
 
-  # Stage 3: Deploy to Production (main branch only, manual approval required)
+  # Stage 3: Deploy to Production — only on push to main (manual approval required)
   # ─────────────────────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: deploy-dev
+    needs: validate
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: databricks-production
     steps:
