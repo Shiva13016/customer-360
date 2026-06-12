@@ -6,7 +6,7 @@ name: ADF CI/CD - Customer 360 Canada Life
 #   1. Push to feature/adf-*  → Validate + checks (CI gate)
 #   2. PR to develop           → Validate + checks (CI gate)
 #   3. Push to develop         → Deploy to DEV environment
-#   4. Push to main            → Deploy to PROD (manual approval required)
+#   4. Push to main            → Deploy to PRODh (manual approval required)
 
 on:
   push:
@@ -70,7 +70,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Scan JSON for unresolved patterns
-        run: python scripts/check_vars.py --path adf/
+        run: python adf/scripts/check_vars.py --path adf/
 
   # Stage 3: Compute quota pre-flight
   quota-preflight:
@@ -83,7 +83,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Run az vm list-skus quota check
-        run: bash scripts/quota_preflight.sh ${{ env.AZURE_SUBSCRIPTION_ID }}
+        run: bash adf/scripts/quota_preflight.sh ${{ env.AZURE_SUBSCRIPTION_ID }}
 
   # Stage 4: Deploy to DEV — only on push to develop
   deploy-dev:
@@ -100,7 +100,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Stop ADF triggers before deploy
-        run: bash scripts/validate_arm.sh stop ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
+        run: bash adf/scripts/validate_arm.sh stop ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
       - name: Deploy ARM to DEV
         uses: azure/arm-deploy@v2
         with:
@@ -112,7 +112,7 @@ jobs:
             linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentName: adf-c360-dev-${{ github.run_number }}
       - name: Restart ADF triggers after deploy
-        run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
+        run: bash adf/scripts/validate_arm.sh start ${{ env.ADF_NAME_DEV }} ${{ env.RESOURCE_GROUP_DEV }}
 
   # Stage 5: Deploy to PROD — only on push to main (manual approval required)
   # Approvers configured in GitHub repo Settings > Environments > adf-production
@@ -130,7 +130,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Stop ADF triggers before deploy
-        run: bash scripts/validate_arm.sh stop ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
+        run: bash adf/scripts/validate_arm.sh stop ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
       - name: Deploy ARM to PROD
         uses: azure/arm-deploy@v2
         with:
@@ -142,4 +142,4 @@ jobs:
             linkedServiceBlobStorage_connectionString="${{ secrets.ADF_BLOB_CONNECTION_STRING }}"
           deploymentName: adf-c360-prod-${{ github.run_number }}
       - name: Restart ADF triggers after deploy
-        run: bash scripts/validate_arm.sh start ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
+        run: bash adf/scripts/validate_arm.sh start ${{ env.ADF_NAME_PROD }} ${{ env.RESOURCE_GROUP_PROD }}
