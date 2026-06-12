@@ -1,3 +1,10 @@
+# C-360 Databricks Asset Bundle - Job Resource Definition
+# Deployed via: databricks bundle deploy --target <development|production>
+#
+# Notebook paths use DAB variables so they resolve correctly per target:
+#   development: /Workspace/Shared/customer-360/development/files/notebooks/...
+#   production:  /Workspace/Shared/customer-360/production/files/notebooks/...
+
 resources:
   jobs:
     c360_pipeline:
@@ -7,56 +14,56 @@ resources:
       # No cluster config needed when workspace has serverless enabled
 
       tasks:
-        # ââ VALIDATION LAYER ââââââââââââââââââââââââââââââââââââââââââââââ
+        # ── VALIDATION LAYER ─────────────────────────────────────────────────
         - task_key: validate_adobe_analytics
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: adobe_analytics
 
         - task_key: validate_call_centre_interactions
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: call_centre_interactions
 
         - task_key: validate_climl_seg_fund_contracts
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: climl_seg_fund_contracts
 
         - task_key: validate_freedom55_advisor
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: freedom55_advisor
 
         - task_key: validate_group_benefits_plan
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: group_benefits_plan
 
         - task_key: validate_group_retirement
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: group_retirement
 
         - task_key: validate_gvl_policy
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: gvl_policy
 
         - task_key: validate_il_policy
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Validate_Bronze_Data
+            notebook_path: ../notebooks/validation/Validate_Bronze_Data
             base_parameters:
               source: il_policy
 
-        # ââ GATE: all validations must pass ââââââââââââââââââââââââââââââ
+        # ── GATE: all validations must pass ──────────────────────────────────
         - task_key: all_validations_complete
           depends_on:
             - task_key: validate_adobe_analytics
@@ -68,14 +75,14 @@ resources:
             - task_key: validate_gvl_policy
             - task_key: validate_il_policy
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
+            notebook_path: ../notebooks/validation/Compliance_Audit_Notebook
 
-        # ââ BRONZE LAYER âââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ── BRONZE LAYER ─────────────────────────────────────────────────────
         - task_key: bronze_delta_group_benefits
           depends_on:
             - task_key: all_validations_complete
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            notebook_path: ../notebooks/bronze/Bronze_Delta_tables
             base_parameters:
               source: group_benefits_plan
 
@@ -83,7 +90,7 @@ resources:
           depends_on:
             - task_key: all_validations_complete
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            notebook_path: ../notebooks/bronze/Bronze_Delta_tables
             base_parameters:
               source: group_retirement
 
@@ -91,7 +98,7 @@ resources:
           depends_on:
             - task_key: all_validations_complete
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            notebook_path: ../notebooks/bronze/Bronze_Delta_tables
             base_parameters:
               source: gvl_policy
 
@@ -99,11 +106,11 @@ resources:
           depends_on:
             - task_key: all_validations_complete
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Bronze_Delta_tables
+            notebook_path: ../notebooks/bronze/Bronze_Delta_tables
             base_parameters:
               source: il_policy
 
-        # ââ GATE: all bronze must complete ââââââââââââââââââââââââââââââââ
+        # ── GATE: all bronze must complete ────────────────────────────────────
         - task_key: all_bronze_complete
           depends_on:
             - task_key: bronze_delta_group_benefits
@@ -111,26 +118,34 @@ resources:
             - task_key: bronze_delta_gvl_policy
             - task_key: bronze_delta_il_policy
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Compliance Audit Notebook
+            notebook_path: ../notebooks/validation/Compliance_Audit_Notebook
             base_parameters:
               layer: bronze
 
-        # ââ SILVER LAYER âââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ── SILVER LAYER ─────────────────────────────────────────────────────
         - task_key: silver_batch_processing_engine
           depends_on:
             - task_key: all_bronze_complete
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Silver_Batch_Processing_Engine
+            notebook_path: ../notebooks/silver/Silver_Batch_Processing_Engine
 
-        # ââ GOLD LAYER ââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ── GOLD LAYER ───────────────────────────────────────────────────────
+        - task_key: gold_batch_processing_engine
+          depends_on:
+            - task_key: silver_batch_processing_engine
+          notebook_task:
+            notebook_path: ../notebooks/gold/Gold_Batch_Processing_Engine
+
         - task_key: gold_agg_notebook
           depends_on:
             - task_key: silver_batch_processing_engine
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/gold_agg_notebook
+            notebook_path: ../notebooks/gold/gold_agg_notebook
 
-        - task_key: gold_batch_processing_engine
+        # ── SERVING LAYER ────────────────────────────────────────────────────
+        - task_key: serving_layer_builder
           depends_on:
+            - task_key: gold_batch_processing_engine
             - task_key: gold_agg_notebook
           notebook_task:
-            notebook_path: /Users/shivakumaryallanti5@gmail.com/project customer 360/Gold_Batch_Processing_Engine
+            notebook_path: ../notebooks/serving/Serving_Layer_Builder
