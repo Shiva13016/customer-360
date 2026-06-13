@@ -1,0 +1,92 @@
+{
+	"name": "ds_sql_control_table",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_sql_control",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [
+			{
+				"name": "source_id",
+				"type": "int",
+				"precision": 10
+			},
+			{
+				"name": "source_system",
+				"type": "varchar"
+			},
+			{
+				"name": "source_type",
+				"type": "varchar"
+			},
+			{
+				"name": "source_path",
+				"type": "varchar"
+			},
+			{
+				"name": "file_pattern",
+				"type": "varchar"
+			},
+			{
+				"name": "target_container",
+				"type": "varchar"
+			},
+			{
+				"name": "target_path",
+				"type": "varchar"
+			},
+			{
+				"name": "is_active",
+				"type": "bit"
+			},
+			{
+				"name": "is_critical",
+				"type": "bit"
+			},
+			{
+				"name": "load_type",
+				"type": "varchar"
+			},
+			{
+				"name": "schedule_cron",
+				"type": "varchar"
+			},
+			{
+				"name": "last_run_status",
+				"type": "varchar"
+			},
+			{
+				"name": "last_run_start",
+				"type": "datetime2",
+				"scale": 7
+			},
+			{
+				"name": "last_run_end",
+				"type": "datetime2",
+				"scale": 7
+			},
+			{
+				"name": "last_file_count",
+				"type": "int",
+				"precision": 10
+			},
+			{
+				"name": "last_row_count",
+				"type": "bigint",
+				"precision": 19
+			},
+			{
+				"name": "created_date",
+				"type": "datetime2",
+				"scale": 7
+			}
+		],
+		"typeProperties": {
+			"schema": "dbo",
+			"table": "ingestion_control"
+		}
+	},
+	"type": "Microsoft.DataFactory/factories/datasets"
+}
