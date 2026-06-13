@@ -1,0 +1,15 @@
+{
+	"name": "pl_master_c360_ingest",
+	"properties": {
+		"description": "Master Customer 360 ingestion pipeline.",
+		"parameters": {
+			"environment": {
+				"type": "String",
+				"defaultValue": "dev"
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2026-06-11T04:51:50Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}
