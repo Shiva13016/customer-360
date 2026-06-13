@@ -1,7 +1,7 @@
 {
-	"name": "pl_ingest_cdc_single",
+	"name": "pl_ingest_filebatch_single",
 	"properties": {
-		"description": "Ingests a single CDC source. Aligned with central metadata pattern.",
+		"description": "Ingests file-batch from raw to bronze. Aligned with 12-column control table schema.",
 		"activities": [
 			{
 				"name": "SetPartition",
@@ -15,7 +15,7 @@
 				"typeProperties": {
 					"variableName": "v_partition",
 					"value": {
-						"value": "@concat('year=',formatDateTime(utcNow(),'yyyy'),'/month=',formatDateTime(utcNow(),'MM'),'/day=',formatDateTime(utcNow(),'dd'))",
+						"value": "@concat('year=', formatDateTime(utcNow(),'yyyy'), '/month=', formatDateTime(utcNow(),'MM'), '/day=', formatDateTime(utcNow(),'dd'))",
 						"type": "Expression"
 					}
 				}
@@ -147,16 +147,16 @@
 				},
 				"userProperties": [],
 				"typeProperties": {
-					"storedProcedureName": "dbo.sp_update_source_status",
+					"storedProcedureName": "[dbo].[sp_complete_pipeline_run]",
 					"storedProcedureParameters": {
-						"source_id": {
+						"log_id": {
 							"value": {
-								"value": "@pipeline().parameters.source_config.source_id",
+								"value": "@pipeline().parameters.source_config.log_id",
 								"type": "Expression"
 							},
-							"type": "Int32"
+							"type": "Int64"
 						},
-						"run_status": {
+						"status": {
 							"value": "Succeeded",
 							"type": "String"
 						},
@@ -200,17 +200,17 @@
 				},
 				"userProperties": [],
 				"typeProperties": {
-					"storedProcedureName": "dbo.sp_update_source_status",
+					"storedProcedureName": "[dbo].[sp_fail_pipeline_run]",
 					"storedProcedureParameters": {
-						"source_id": {
+						"log_id": {
 							"value": {
-								"value": "@pipeline().parameters.source_config.source_id",
+								"value": "@pipeline().parameters.source_config.log_id",
 								"type": "Expression"
 							},
-							"type": "Int32"
+							"type": "Int64"
 						},
-						"run_status": {
-							"value": "Failed",
+						"error_message": {
+							"value": "Copy activity failed.",
 							"type": "String"
 						}
 					}
@@ -233,11 +233,8 @@
 				],
 				"userProperties": [],
 				"typeProperties": {
-					"message": {
-						"value": "@concat('CDC ingestion failed for source: ', pipeline().parameters.source_config.source_system)",
-						"type": "Expression"
-					},
-					"errorCode": "CHILD_CDC_INGESTION_FAILED"
+					"message": "Child ingestion failed; control table updated.",
+					"errorCode": "CHILD_FAIL"
 				}
 			}
 		],

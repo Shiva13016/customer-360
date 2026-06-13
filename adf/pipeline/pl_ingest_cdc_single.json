@@ -1,7 +1,7 @@
 {
-	"name": "pl_ingest_api_single",
+	"name": "pl_ingest_cdc_single",
 	"properties": {
-		"description": "Ingests a single API/REST source. Aligned with central metadata pattern.",
+		"description": "Ingests a single CDC source. Aligned with central metadata pattern.",
 		"activities": [
 			{
 				"name": "SetPartition",
@@ -84,12 +84,8 @@
 					"sink": {
 						"type": "DelimitedTextSink",
 						"storeSettings": {
-							"type": "AzureBlobFSWriteSettings"
-						},
-						"formatSettings": {
-							"type": "DelimitedTextWriteSettings",
-							"quoteAllText": true,
-							"fileExtension": ".csv"
+							"type": "AzureBlobFSWriteSettings",
+							"copyBehavior": "PreserveHierarchy"
 						}
 					},
 					"enableStaging": false
@@ -238,10 +234,10 @@
 				"userProperties": [],
 				"typeProperties": {
 					"message": {
-						"value": "@concat('API ingestion failed for system source: ', pipeline().parameters.source_config.source_system)",
+						"value": "@concat('CDC ingestion failed for source: ', pipeline().parameters.source_config.source_system)",
 						"type": "Expression"
 					},
-					"errorCode": "CHILD_API_INGESTION_FAILED"
+					"errorCode": "CHILD_CDC_INGESTION_FAILED"
 				}
 			}
 		],

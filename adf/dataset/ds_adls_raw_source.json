@@ -1,21 +1,15 @@
 {
-	"name": "ds_adls_bronze_sink",
+	"name": "ds_adls_raw_source",
 	"properties": {
 		"linkedServiceName": {
 			"referenceName": "ls_adls_c360",
 			"type": "LinkedServiceReference"
 		},
 		"parameters": {
-			"p_bronze_container": {
+			"p_container": {
 				"type": "string"
 			},
-			"p_source_name": {
-				"type": "string"
-			},
-			"p_partition": {
-				"type": "string"
-			},
-			"p_filename": {
+			"p_folder_path": {
 				"type": "string"
 			}
 		},
@@ -24,16 +18,12 @@
 		"typeProperties": {
 			"location": {
 				"type": "AzureBlobFSLocation",
-				"fileName": {
-					"value": "@dataset().p_filename",
-					"type": "Expression"
-				},
 				"folderPath": {
-					"value": "@concat(dataset().p_source_name,'/',dataset().p_partition)",
+					"value": "@dataset().p_folder_path",
 					"type": "Expression"
 				},
 				"fileSystem": {
-					"value": "@dataset().p_bronze_container",
+					"value": "@dataset().p_container",
 					"type": "Expression"
 				}
 			},

@@ -1,7 +1,7 @@
 {
-	"name": "pl_ingest_filebatch_single",
+	"name": "pl_ingest_api_single",
 	"properties": {
-		"description": "Ingests file-batch from raw to bronze. Aligned with 12-column control table schema.",
+		"description": "Ingests a single API/REST source. Aligned with central metadata pattern.",
 		"activities": [
 			{
 				"name": "SetPartition",
@@ -15,7 +15,7 @@
 				"typeProperties": {
 					"variableName": "v_partition",
 					"value": {
-						"value": "@concat('year=', formatDateTime(utcNow(),'yyyy'), '/month=', formatDateTime(utcNow(),'MM'), '/day=', formatDateTime(utcNow(),'dd'))",
+						"value": "@concat('year=',formatDateTime(utcNow(),'yyyy'),'/month=',formatDateTime(utcNow(),'MM'),'/day=',formatDateTime(utcNow(),'dd'))",
 						"type": "Expression"
 					}
 				}
@@ -84,8 +84,12 @@
 					"sink": {
 						"type": "DelimitedTextSink",
 						"storeSettings": {
-							"type": "AzureBlobFSWriteSettings",
-							"copyBehavior": "PreserveHierarchy"
+							"type": "AzureBlobFSWriteSettings"
+						},
+						"formatSettings": {
+							"type": "DelimitedTextWriteSettings",
+							"quoteAllText": true,
+							"fileExtension": ".csv"
 						}
 					},
 					"enableStaging": false
@@ -147,16 +151,16 @@
 				},
 				"userProperties": [],
 				"typeProperties": {
-					"storedProcedureName": "[dbo].[sp_complete_pipeline_run]",
+					"storedProcedureName": "dbo.sp_update_source_status",
 					"storedProcedureParameters": {
-						"log_id": {
+						"source_id": {
 							"value": {
-								"value": "@pipeline().parameters.source_config.log_id",
+								"value": "@pipeline().parameters.source_config.source_id",
 								"type": "Expression"
 							},
-							"type": "Int64"
+							"type": "Int32"
 						},
-						"status": {
+						"run_status": {
 							"value": "Succeeded",
 							"type": "String"
 						},
@@ -200,17 +204,17 @@
 				},
 				"userProperties": [],
 				"typeProperties": {
-					"storedProcedureName": "[dbo].[sp_fail_pipeline_run]",
+					"storedProcedureName": "dbo.sp_update_source_status",
 					"storedProcedureParameters": {
-						"log_id": {
+						"source_id": {
 							"value": {
-								"value": "@pipeline().parameters.source_config.log_id",
+								"value": "@pipeline().parameters.source_config.source_id",
 								"type": "Expression"
 							},
-							"type": "Int64"
+							"type": "Int32"
 						},
-						"error_message": {
-							"value": "Copy activity failed.",
+						"run_status": {
+							"value": "Failed",
 							"type": "String"
 						}
 					}
@@ -233,8 +237,11 @@
 				],
 				"userProperties": [],
 				"typeProperties": {
-					"message": "Child ingestion failed; control table updated.",
-					"errorCode": "CHILD_FAIL"
+					"message": {
+						"value": "@concat('API ingestion failed for system source: ', pipeline().parameters.source_config.source_system)",
+						"type": "Expression"
+					},
+					"errorCode": "CHILD_API_INGESTION_FAILED"
 				}
 			}
 		],
